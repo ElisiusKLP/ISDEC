@@ -1,0 +1,12 @@
+# Ignore build and cache folders
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignore virtual environment or dependency caches
+.venv/
+.uv_cache/
+
+# folders
+**/figures/
+**/data/
