@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.1"
+__generated_with = "0.23.3"
 app = marimo.App()
 
 
@@ -101,6 +101,7 @@ def _(epo, mne, np):
         np.zeros(n_epochs, int),
         labels
     ])
+    print(f"Events array shape: {events.shape}")
     unique_classes = np.unique(labels)
 
     event_id = {f"class_{c}": c for c in unique_classes}
@@ -109,11 +110,26 @@ def _(epo, mne, np):
     epochs = mne.EpochsArray(
         x_t, info, 
         events=events, event_id=event_id,
-        tmin=-0.5)
+        tmin=-0.5,
+        baseline=(-0.5, 0))
 
     montage = mne.channels.make_standard_montage("standard_1020")
     epochs.set_montage(montage)
     return (epochs,)
+
+
+@app.cell
+def _():
+    # save raw epochs to disk
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # Plotting Raw Epochs
+    """)
+    return
 
 
 @app.cell
@@ -124,7 +140,7 @@ def _(epochs):
     epochs.compute_psd().plot()
 
     # plot psd over channels
-    epochs.compute_psd().plot(average=True)
+    epochs.compute_psd(fmax=128).plot(average=True)
     return
 
 
@@ -140,6 +156,7 @@ def _(mo):
 def _(class_names, epochs):
     # plots evokeds for all 5 classes
     plots = []
+    # create an evokeds dict
     for i in range(5):
         evoked = epochs[f"class_{i}"].average()
         plot = evoked.plot(titles=f"Evoked response for class '{class_names[i]}'")
@@ -160,7 +177,7 @@ def _(plots, rootdir):
     with PdfPages(pdf_path) as pdf:
         for it in range(5):
             fig = plots[it]
-        
+
             pdf.savefig(fig)
             plt.close(fig)
 
@@ -169,8 +186,54 @@ def _(plots, rootdir):
 
 
 @app.cell
-def _():
+def _(class_names, epochs, mne):
+    evokeds_list = [
+        epochs[f"class_{i}"].average()
+        for i in range(5)
+    ]
+
+    evokeds = dict(zip(class_names, evokeds_list))
+
+    mne.viz.plot_compare_evokeds(evokeds, title="Evoked responses for all classes", combine="mean")
+    return (evokeds,)
+
+
+@app.cell
+def _(evokeds, mne):
+    mne.viz.plot_compare_evokeds(evokeds, combine="median", title="Median")
     return
+
+
+@app.cell
+def _(evokeds, mne):
+    mne.viz.plot_compare_evokeds(evokeds, combine="gfp", title="gfp")
+    return
+
+
+@app.cell
+def _(evokeds, mne):
+    def custom_func(x):
+        return x.max(axis=1)
+
+
+    mne.viz.plot_compare_evokeds(evokeds, combine=custom_func)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+ 
+    """)
+    return
+
+
+app._unparsable_cell(
+    r"""
+    def
+    """,
+    name="_"
+)
 
 
 if __name__ == "__main__":
