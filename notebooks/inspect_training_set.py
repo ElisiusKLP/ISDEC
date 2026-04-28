@@ -106,6 +106,13 @@ def _(mne_montage):
 
 
 @app.cell
+def _(mne):
+    standard_montage = mne.channels.make_standard_montage('standard_1020')
+    standard_montage.plot()
+    return
+
+
+@app.cell
 def _(epo, mne, np):
 
     x = epo["x"]  # (795, 64, 300)
