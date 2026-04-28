@@ -4,7 +4,7 @@ import sklearn
 import joblib
 from pathlib import Path
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, confusion_matrix
 
 #https://scikit-learn.org/stable/modules/ensemble.html#random-forest-parameters
 
@@ -43,8 +43,22 @@ def fit_model(train_dir, val_dir):
         x_val = val_data['x'].reshape(val_data['x'].shape[0], -1)
         y_val = val_data['y']
 
-        score = model_fit.score(x_val, y_val)
+        y_pred = model_fit.predict(x_val)
+        score = accuracy_score(y_val, y_pred)
+        # Create confusion matrix and save plot
+        confusion_matrix_val = confusion_matrix(y_val, y_pred)
         print(f"Trained on {file.name}, validated on {val_file.name}: {score:.3f}")
+        print(f"Confusion Matrix:\n{confusion_matrix_val}")
+        disp = sklearn.metrics.ConfusionMatrixDisplay(confusion_matrix=confusion_matrix_val)
+        ax = disp.plot()
+        disp.ax_.set_title(f"Confusion Matrix — Trained: {file.name}")
+
+        # save plot
+        plt_filepath = Path("results/plots/accuracy")
+        plt_filepath.mkdir(parents=True, exist_ok=True)
+        fig = disp.ax_.figure
+        fig.savefig(plt_filepath / f"confusion_matrix_{file.stem}.png")
+        
 
 if __name__ == "__main__":
     fit_model(train_dir, val_dir)
