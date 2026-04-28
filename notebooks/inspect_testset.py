@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.1"
+__generated_with = "0.23.3"
 app = marimo.App()
 
 
@@ -35,9 +35,9 @@ def _(Path, os):
 
 
 @app.cell
-def _(Path, h5py, sio):
+def _(Path, h5py, np, sio):
     # load data
-    testdata_dirpath = Path("data/is_dataset/Training_set")
+    testdata_dirpath = Path("data/is_dataset/Test_set")
     subject_ids = [f"{i:02d}" for i in range(1, 16)]
     pattern = f"Data_Sample{{subject_id}}.mat"
 
@@ -47,22 +47,56 @@ def _(Path, h5py, sio):
     filepath = testdata_dirpath / filename
     print(f"Loading data from {filepath.absolute()}...")
 
-    datafile = sio.loadmat(filepath.absolute())
-    print("Keys in the loaded .mat file:", datafile.keys())
+    try:
+        datafile = sio.loadmat(filepath.absolute())
+        print("Keys in the loaded .mat file:", datafile.keys())
 
-    with h5py.File(filepath.absolute(), 'r') as f:
-        data = f
-        print("Keys in the .mat file:", list(data.keys()))
+        # extract data from legacy MAT files
+        raw_key = "epo_test" if "epo_test" in datafile else "epo_train"
+        print(f"Header: {datafile['__header__']}")
+        raw = datafile[raw_key]
+        epo = raw[0, 0]
+        print(epo.dtype.names)
+        print(f"Shape of epo['x']: {epo['x'].shape}")
+        print(f"Shape of epo['y']: {epo['y'].shape}")
+        if 'className' in epo.dtype.names:
+            class_names = [str(c[0]) for c in epo["className"][0]]
+            print(f"Class names: {class_names}")
 
-        epo_test_group = f['epo_test']
-        print("Keys in epo_test group:", list(epo_test_group.keys()))
+    except NotImplementedError:
+        print("Detected MATLAB v7.3 file; using h5py instead of scipy.io.loadmat.")
+        with h5py.File(filepath.absolute(), 'r') as datafile:
+            print("Keys in the loaded .mat file:", list(datafile.keys()))
+            epo = datafile['epo_test']
+            print(f"Keys in epo_test: {list(epo.keys())}")
+            print(f"Shape of epo['x']: {epo['x'].shape}")
+            print(f"Shape of epo['y']: {np.array(epo['y']).shape}")
+            clab_refs = np.array(epo['clab']).squeeze()
+            channel_names = []
+            for ref in clab_refs[:5]:
+                chars = np.array(datafile[ref]).squeeze()
+                channel_names.append(''.join(chr(int(c)) for c in chars if int(c) != 0))
+            print(f"First channel names: {channel_names}")
+    return datafile, filepath
 
-        print(f"epo_test['clab']: {epo_test_group['clab']}")
-        print(f"epo_test['y']: {epo_test_group['y']}")
 
-        # decode all
-
-    return (filepath,)
+@app.cell
+def _(datafile):
+    mnt = datafile["mnt"]
+    print(f"Shape of mnt: {mnt.shape}")
+    print(f"Shape of mnt[0,0]: {mnt[0,0].shape}")
+    print(f"Length of mnt[0,0]: {len(mnt[0,0])}")
+    pos_x = mnt[0,0][0]
+    pos_y = mnt[0,0][1]
+    pos_3d = mnt[0,0][2]
+    chans = mnt[0,0][3]
+    print(f"Shape of pos_x: {pos_x.shape}")
+    print(f"Shape of pos_y: {pos_y.shape}")
+    print(f"Shape of pos_z: {pos_3d.shape}")
+    print(f"Shape of chans: {chans.shape}")
+    chans
+    # pos_3d is a 3,64 array, where the first dimension corresponds to x,y,z coordinates, and the second dimension corresponds to the 64 channels.
+    return
 
 
 @app.cell
@@ -102,6 +136,12 @@ def _(filepath, h5py, np):
 
 
 @app.cell
+def _(data_dict):
+    data_dict
+    return
+
+
+@app.cell
 def _(filepath, h5py):
     fr = h5py.File(filepath.absolute(), "r")
     clab_refs = fr["epo_test"]["clab"]
@@ -110,7 +150,7 @@ def _(filepath, h5py):
     for i in range(clab_refs.shape[0]):
         ref = clab_refs[i, 0]        # this is an HDF5 reference
         obj = fr[ref]                # follow reference into #refs#
-    
+
         # decode MATLAB char array (uint16 → string)
         string = "".join(chr(c) for c in obj[:].flatten())
         clab.append(string)
@@ -192,6 +232,16 @@ def _(filepath, h5py, np):
 
     print("\n Refs: ")
     print(f" Refs keys: {decoded['#refs#'].keys()}")
+    return (decoded,)
+
+
+@app.cell
+def _(decoded):
+    mount = decoded["mnt"]
+    print(f"Shape of mnt: {mount.keys()}")
+
+    mount["pos_3d"].shape
+
     return
 
 
