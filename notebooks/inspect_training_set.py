@@ -74,7 +74,34 @@ def _(datafile):
     print(f"Shape of mnt: {mnt.shape}")
     print(f"Shape of mnt[0,0]: {mnt[0,0].shape}")
     print(f"Length of mnt[0,0]: {len(mnt[0,0])}")
-    mnt
+    pos_x = mnt[0,0][0]
+    pos_y = mnt[0,0][1]
+    pos_3d = mnt[0,0][2]
+    chans = mnt[0,0][3]
+    print(f"Shape of pos_x: {pos_x.shape}")
+    print(f"Shape of pos_y: {pos_y.shape}")
+    print(f"Shape of pos_z: {pos_3d.shape}")
+    print(f"Shape of chans: {chans.shape}")
+    chans
+    # pos_3d is a 3,64 array, where the first dimension corresponds to x,y,z coordinates, and the second dimension corresponds to the 64 channels.
+    return chans, pos_3d
+
+
+@app.cell
+def _(chans, mne, np, pos_3d):
+
+    pos = np.stack((pos_3d[0], pos_3d[1], pos_3d[2]), axis=1)
+    print(f"Shape of pos: {pos.shape}")
+    channel_names = [ch[0] for ch in chans[0]]
+    print(f"Channel names: {channel_names}")
+    mne_montage = mne.channels.make_dig_montage(ch_pos=dict(zip(channel_names, pos)), coord_frame='head')
+    print(mne_montage)
+    return (mne_montage,)
+
+
+@app.cell
+def _(mne_montage):
+    mne_montage.plot()
     return
 
 

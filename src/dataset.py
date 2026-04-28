@@ -146,7 +146,8 @@ def convert_mat_to_mne(mat_file):
         tmin=-0.5,
         baseline=(-0.5, 0))
 
-    montage = mne.channels.make_standard_montage("standard_1020")
+    #mne.channels.make_standard_montage("standard_1020")
+    montage = mat_to_mne_montage(mat_data)
     epochs.set_montage(montage)
 
     return epochs
@@ -162,6 +163,17 @@ def mne_to_dict(epochs, subject_id):
         'sfreq': sfreq,
         'subject_id': subject_id
     }
+
+def mat_to_mne_montage(mat_data):
+    pos_3d = mat_data['mnt'][2]
+    channels = mat_data['mnt'][3]
+
+    pos = np.stack((pos_3d[0], pos_3d[1], pos_3d[2]), axis=1)
+    channel_names = [ch[0] for ch in channels[0]]
+
+    mne_montage = mne.channels.make_dig_montage(ch_pos=dict(zip(channel_names, pos)), coord_frame='head')
+    return mne_montage
+    
 
 if __name__ == "__main__":
     data_dir = Path("data/is_dataset").absolute()
