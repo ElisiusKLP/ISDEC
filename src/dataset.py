@@ -43,7 +43,7 @@ def create_dataset(data_dir, output_dir):
         print(f"Saved epochs to {fif_file}")
 
         # Extract raw data arrays
-        subject_data = mne_to_dict(epochs, subject_id)
+        subject_data = mne_to_dict(epochs, subject_id, class_names=list(epochs.event_id.keys()))
 
         # Save raw data to joblib
         joblib_filename = f"raw_sub{subject_id}.joblib"
@@ -54,6 +54,8 @@ def create_dataset(data_dir, output_dir):
         print(f"Saved raw data to {joblib_file}")
 
 def convert_mat_to_mne(mat_file):
+    class_names = None
+
     try:
         # First try to load matlab file with scipy sio.loadmat
         mat_data = sio.loadmat(mat_file)
@@ -80,10 +82,12 @@ def convert_mat_to_mne(mat_file):
             str(np.ravel(c)[0])  # unwrap nested array -> string
             for c in np.ravel(epo["clab"])
         ]
-
         # events
         y = epo["y"]
         labels = np.argmax(y, axis=0).astype(int)
+
+        if "className" in epo.dtype.names:
+            class_names = [str(c[0]) for c in epo["className"][0]]
 
         montage = mat_to_mne_montage(mat_data=mat_data, set_type="train")
 
@@ -135,6 +139,9 @@ def convert_mat_to_mne(mat_file):
 
             y = np.array(epo["y"]).squeeze() if "y" in epo else np.array([])
 
+            if "className" in epo:
+                class_names = [_decode_h5_string(ref) for ref in np.array(epo["className"]).squeeze()]
+
             if y.ndim == 2 and y.shape[1] == x_t.shape[0]:
                 labels = np.argmax(y, axis=0).astype(int)
             elif y.ndim == 1 and y.size == x_t.shape[0]:
@@ -148,7 +155,7 @@ def convert_mat_to_mne(mat_file):
     info = mne.create_info(
         ch_names=ch_names,
         sfreq=sfreq,
-        ch_types="eeg"
+        ch_types="eeg",
     )
 
     n_epochs = x_t.shape[0]
@@ -161,7 +168,13 @@ def convert_mat_to_mne(mat_file):
 
     unique_classes = np.unique(labels)
 
-    event_id = {f"class_{c}": c for c in unique_classes}
+    if class_names is not None and len(class_names) > 0:
+        event_id = {
+            class_names[i] if i < len(class_names) else f"class_{int(c)}": int(c)
+            for i, c in enumerate(unique_classes)
+        }
+    else:
+        event_id = {f"class_{int(c)}": int(c) for c in unique_classes}
 
     epochs = mne.EpochsArray(
         x_t, info,
@@ -173,7 +186,7 @@ def convert_mat_to_mne(mat_file):
 
     return epochs
 
-def mne_to_dict(epochs, subject_id):
+def mne_to_dict(epochs, subject_id, class_names):
     x = epochs.get_data()
     y = epochs.events[:, -1]
     sfreq = epochs.info['sfreq']
@@ -182,6 +195,7 @@ def mne_to_dict(epochs, subject_id):
         'x': x,
         'y': y,
         'sfreq': sfreq,
+        'class_names': class_names,
         'subject_id': subject_id
     }
 

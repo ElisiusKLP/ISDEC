@@ -69,6 +69,12 @@ def _(Path, sio):
 
 
 @app.cell
+def _(epo):
+    epo["y"]
+    return
+
+
+@app.cell
 def _(datafile):
     mnt = datafile["mnt"]
     print(f"Shape of mnt: {mnt.shape}")
