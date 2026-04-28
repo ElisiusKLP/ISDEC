@@ -1,0 +1,43 @@
+import numpy as np
+import sklearn
+import joblib
+from pathlib import Path
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+
+#https://scikit-learn.org/stable/modules/ensemble.html#random-forest-parameters
+
+joblib_dir = Path("data/derivatives/joblib")
+
+train_dir = joblib_dir / "training_set"
+
+val_dir = joblib_dir / "validation_set"
+
+def train_model (x, y):
+    model = RandomForestClassifier(n_estimators=50, max_features=None)
+    model.fit(x, y)
+    return model
+
+
+def fit_model(train_dir, val_dir):
+    train_files = list(train_dir.glob('*.joblib'))
+    val_files = list(val_dir.glob('*.joblib'))
+
+    for file in train_files:
+        data = joblib.load(file)
+        x_train = data['x'].reshape(data['x'].shape[0], -1)
+        print(f"x_train shape: {x_train.shape}")
+        y_train = data['y']
+
+        model_fit = train_model(x_train, y_train)
+
+        for val_file in val_files:
+            val_data = joblib.load(val_file)
+            x_val = val_data['x'].reshape(val_data['x'].shape[0], -1)
+            y_val = val_data['y']
+
+            score = model_fit.score(x_val, y_val)
+            print(f"Trained on {file.name}, validated on {val_file.name}: {score:.3f}")
+
+if __name__ == "__main__":
+    fit_model(train_dir, val_dir)
