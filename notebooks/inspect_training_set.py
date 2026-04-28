@@ -65,7 +65,17 @@ def _(Path, sio):
     epo["className"][0]
     class_names = [str(c[0]) for c in epo["className"][0]]
     print(f"Class names: {class_names}")
-    return class_names, epo
+    return class_names, datafile, epo
+
+
+@app.cell
+def _(datafile):
+    mnt = datafile["mnt"]
+    print(f"Shape of mnt: {mnt.shape}")
+    print(f"Shape of mnt[0,0]: {mnt[0,0].shape}")
+    print(f"Length of mnt[0,0]: {len(mnt[0,0])}")
+    mnt
+    return
 
 
 @app.cell
@@ -116,6 +126,12 @@ def _(epo, mne, np):
     montage = mne.channels.make_standard_montage("standard_1020")
     epochs.set_montage(montage)
     return (epochs,)
+
+
+@app.cell
+def _(mne):
+    mne.channels.get_builtin_montages()
+    return
 
 
 @app.cell

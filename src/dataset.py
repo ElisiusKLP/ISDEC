@@ -42,15 +42,7 @@ def create_dataset(data_dir, output_dir):
         print(f"Saved epochs to {fif_file}")
 
         # Extract raw data arrays
-        x = epochs.get_data()
-        y = epochs.events[:, -1]
-        sfreq = epochs.info['sfreq']
-        subject_data = {
-            'x': x,
-            'y': y,
-            'sfreq': sfreq,
-            'subject_id': subject_id
-        }
+        subject_data = mne_to_dict(epochs, subject_id)
 
         # Save raw data to joblib
         joblib_filename = f"raw_sub{subject_id}.joblib"
@@ -159,11 +151,23 @@ def convert_mat_to_mne(mat_file):
 
     return epochs
 
+def mne_to_dict(epochs, subject_id):
+    x = epochs.get_data()
+    y = epochs.events[:, -1]
+    sfreq = epochs.info['sfreq']
+
+    return {
+        'x': x,
+        'y': y,
+        'sfreq': sfreq,
+        'subject_id': subject_id
+    }
+
 if __name__ == "__main__":
     data_dir = Path("data/is_dataset").absolute()
     # glob subdir
     sets = data_dir.glob("*/")
-    output_dir = Path("data/derivatives").absolute()
+    output_dir = Path("data/derivatives/raw").absolute()
     
     for set_dir in sets:
         print(f"Processing dataset in {set_dir}...")
