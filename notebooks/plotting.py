@@ -38,6 +38,8 @@ def _(Path, mpimg, plt):
 
     img_dir = Path("results/plots/accuracy")
     imgs = sorted(img_dir.glob("*.png"))
+    tag = "preprocessed"
+    imgs = [img for img in imgs if tag in img.stem]
     if not imgs:
         language = "en"
     n_cols = 3
@@ -56,7 +58,7 @@ def _(Path, mpimg, plt):
         ax.axis("off")
 
     plt.tight_layout()
-    out_pdf = img_dir / "all_confusion_matrices_grid.pdf"
+    out_pdf = img_dir / f"all_confusion_matrices_grid_{tag}.pdf"
     out_pdf.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_pdf.resolve(), bbox_inches="tight")
     print(f"Saved grid PDF to {out_pdf.resolve()}")

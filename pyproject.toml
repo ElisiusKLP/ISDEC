@@ -13,6 +13,7 @@ dependencies = [
     "mne-icalabel>=0.8.1",
     "scikit-learn>=1.8.0",
     "scipy>=1.17.1",
+    "torch>=2.11.0",
     "tqdm>=4.67.3",
 ]
 

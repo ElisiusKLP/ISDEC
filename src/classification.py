@@ -8,7 +8,7 @@ from sklearn.metrics import accuracy_score, confusion_matrix
 
 #https://scikit-learn.org/stable/modules/ensemble.html#random-forest-parameters
 
-joblib_dir = Path("data/derivatives/raw/joblib")
+joblib_dir = Path("data/derivatives/preprocessed/joblib")
 
 train_dir = joblib_dir / "training_set"
 
