@@ -78,6 +78,16 @@ def preprocess(input_dir, set_type: str):
         # Baseline correction
         epochs.apply_baseline((-0.5, 0))
 
+        # Plot the epochs for QC
+        ICLabel_exclusions = {
+            idx: {
+                "label": labels[idx], 
+                "prob": labels_probs[idx]
+                } for idx in exclude_idx
+            }
+        print(f"ICLabel_exclusions: {ICLabel_exclusions}")
+        QC(epochs, ica, exclude_idx, sub_id, ICLabel_exclusions)
+
         # Save preprocessed epochs
         preprocessed_dir = output_dir / "mne" / set_type / file.name
         preprocessed_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -104,6 +114,31 @@ def label_ica_exclusion(ica, epochs, threshold=0.8):
     ]
     print(f"Excluding components {exclude_idx}")
     return exclude_idx
+
+def QC(epochs, ica, exclude_idx, subject_id, ICLabel_exclusions: dict):
+    """Save plots to investigate the prepreocessing quality"""
+    # Plot the epochs for QC
+    psd_plt = epochs.plot_psd(fmax=100, show=False)
+    psd_path = Path("results/plots/preprocessing/psd") / f"psd_sub-{subject_id}.png"
+    psd_path.parent.mkdir(parents=True, exist_ok=True)
+    psd_plt.savefig(psd_path.resolve(), bbox_inches="tight")
+
+    # Plot ICA components
+    ica_plt = ica.plot_components(show=False)
+    ica_path = Path("results/plots/preprocessing/ica") / f"ica_sub-{subject_id}.png"
+    ica_path.parent.mkdir(parents=True, exist_ok=True)
+    ica_plt.savefig(ica_path.resolve(), bbox_inches="tight")
+
+    # Save the ICLabel exclusions as txt
+    iclabel_path = Path("results/plots/preprocessing/iclabel") / f"iclabel_sub-{subject_id}.txt"
+    iclabel_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(iclabel_path, "w") as f:
+        f.write(f"ICA Exclusions for subject {subject_id}:\n")
+        for idx, info in ICLabel_exclusions.items():
+            f.write(f"Component {idx}: Label={info['label']}, Probability={info['prob']:.2f}\n")
+
+    print(f"Saved QC plots and ICLabel exclusions for subject {subject_id}")
+
 
 if __name__ == "__main__":
     data_partitions = ["training_set", "validation_set", "test_set"]
