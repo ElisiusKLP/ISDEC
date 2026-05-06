@@ -27,6 +27,7 @@ val_dir = joblib_dir / "validation_set"
 MODEL_REGISTRY = {
     "random_forest": models.RandomForestStrategy,
     "logistic_regression": models.LogisticRegressionStrategy,
+    "svm": models.SVMStrategy,
 }
 
 
@@ -51,6 +52,7 @@ def fit_model(strategy: ModelStrategy, train_dir: Path, val_dir: Path):
     
     # setup a score logger
     score_logger = []
+    scale_tag = 'scale' if strategy.scale else 'no_scale'
 
     for file in tqdm(train_files, desc="Training models on subjects"):
         print(f"Classifying on file: {file.name}")
@@ -108,7 +110,7 @@ def fit_model(strategy: ModelStrategy, train_dir: Path, val_dir: Path):
         plt_filepath = Path(f"results/plots/accuracy/{strategy.get_name()}")
         plt_filepath.mkdir(parents=True, exist_ok=True)
         fig = disp.ax_.figure
-        fig.savefig(plt_filepath / f"{strategy.get_name()}_{file.stem}_confusion_matrix.png")
+        fig.savefig(plt_filepath / f"{strategy.get_name()}__{scale_tag}_{file.stem}_confusion_matrix.png")
     
     # save all images into a single grid in a pdf
     tags = ["preprocessed", "raw"]
@@ -124,7 +126,7 @@ def fit_model(strategy: ModelStrategy, train_dir: Path, val_dir: Path):
     # save scores to a log file
     score_log_dir = Path("results/logs/scores")
     score_log_dir.mkdir(parents=True, exist_ok=True)
-    score_log_path = score_log_dir / f"{strategy.get_name()}_scores.csv"
+    score_log_path = score_log_dir / f"{strategy.get_name()}_{scale_tag}_scores.csv"
     with open(score_log_path, "w") as f:
         f.write("subject,score\n")
         for entry in score_logger:

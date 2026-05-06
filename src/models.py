@@ -105,3 +105,35 @@ class LogisticRegressionStrategy(ModelStrategy):
 
     def get_name(self) -> str:
         return "logistic_regression"
+
+class SVMStrategy(ModelStrategy):
+    def __init__(self, kernel: str = "rbf", C: float = 1.0, scale: bool = True):
+        self.kernel = kernel
+        self.C = C
+        self.scale = scale
+
+    def transform_train(self, x: np.ndarray) -> np.ndarray:
+        """Flatten to (n_samples, n_features)"""
+        return x.reshape(x.shape[0], -1)
+
+    def transform_val(self, x: np.ndarray) -> np.ndarray:
+        """Same transformation as training"""
+        return x.reshape(x.shape[0], -1)
+
+    def create_model(self) -> Pipeline:
+        """Create a pipeline with optional scaling and SVM classifier"""
+        from sklearn.svm import SVC
+
+        steps = []
+        if self.scale:
+            steps.append(("scaler", StandardScaler()))
+        steps.append(
+            (
+                "classifier",
+                SVC(kernel=self.kernel, C=self.C),
+            )
+        )
+        return Pipeline(steps=steps)
+
+    def get_name(self) -> str:
+        return "svm"

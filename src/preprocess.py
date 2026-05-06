@@ -14,6 +14,32 @@ mne_dir = Path("data/derivatives/raw/mne")
 output_dir = Path("data/derivatives/preprocessed").absolute()
 output_dir.mkdir(parents=True, exist_ok=True)
 
+def describe_ica(ica_obj):
+    """Print key numeric attributes and shapes of an MNE ICA object."""
+    print("Inspecting ICA object:")
+    attrs = [
+        "n_components_",
+        "n_pca_components_",
+        "n_channels_",
+        "mixing_matrix_",
+        "unmixing_matrix_",
+        "pca_components_",
+        "pca_explained_variance_",
+        "exclude",
+    ]
+    for attr in attrs:
+        if hasattr(ica_obj, attr):
+            val = getattr(ica_obj, attr)
+            try:
+                if hasattr(val, "shape"):
+                    print(f" - {attr}: shape={val.shape}, dtype={getattr(val,'dtype', type(val))}")
+                else:
+                    print(f" - {attr}: {val}")
+            except Exception as e:
+                print(f" - {attr}: <error reading: {e}>")
+        else:
+            print(f" - {attr}: <missing>")
+
 def preprocess(input_dir, set_type: str):
     all_files = list(input_dir.glob('*.fif'))
 
@@ -39,15 +65,18 @@ def preprocess(input_dir, set_type: str):
         if set_type == "training_set": # Only do ICA on training set to avoid data leakage
             ica = ICA(
                 n_components=20, 
-                max_iter="auto", 
+                max_iter="auto",
                 random_state=2001,
                 method="infomax", # ICLabel method
                 fit_params=dict(extended=True) #ICLabel method
             )
+            
             ica_filename = output_dir / "ica" / set_type / f"ica_sub-{sub_id}-ica.fif"
             ica_filename.parent.mkdir(parents=True, exist_ok=True) # Create the directory if it doesn't exist
 
-            ica.fit(epochs)
+            ica.fit(epochs.copy())
+            describe_ica(ica)
+            print(f"ICA n_components_={getattr(ica, 'n_components_', None)} for subject {sub_id}")
             ica.save(ica_filename, overwrite=True)
             print(f"Saved ICA solution to {ica_filename}")
         else:
@@ -73,10 +102,18 @@ def preprocess(input_dir, set_type: str):
         print(f"Excluding components {exclude_idx}")
 
         # Apply ICA
-        ica.apply(epochs, exclude=exclude_idx)
+        ica.exclude = exclude_idx
+        ica.apply(epochs)
 
         # Baseline correction
         epochs.apply_baseline((-0.5, 0))
+
+        # Filter
+        epochs.filter(
+            l_freq=1.0, 
+            h_freq=40.0,
+            method="iir",
+        )
 
         # Plot the epochs for QC
         ICLabel_exclusions = {
@@ -86,7 +123,13 @@ def preprocess(input_dir, set_type: str):
                 } for idx in exclude_idx
             }
         print(f"ICLabel_exclusions: {ICLabel_exclusions}")
-        QC(epochs, ica, exclude_idx, sub_id, ICLabel_exclusions)
+        QC(
+            clean=epochs, 
+            raw=subject_file,
+            ica=ica,
+            subject_id=sub_id, 
+            ICLabel_exclusions=ICLabel_exclusions
+        )
 
         # Save preprocessed epochs
         preprocessed_dir = output_dir / "mne" / set_type / file.name
@@ -115,22 +158,30 @@ def label_ica_exclusion(ica, epochs, threshold=0.8):
     print(f"Excluding components {exclude_idx}")
     return exclude_idx
 
-def QC(epochs, ica, exclude_idx, subject_id, ICLabel_exclusions: dict):
+def QC(clean, raw, ica, subject_id, ICLabel_exclusions: dict):
     """Save plots to investigate the prepreocessing quality"""
+    qc_dir = Path("results/preprocessing")
+
+    # Plot the raw epochs for QC
+    raw_plt = raw.compute_psd(fmax=100).plot(show=False)
+    raw_path = qc_dir / "psd_raw" / f"psd-raw_sub-{subject_id}.png"
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_plt.savefig(raw_path.resolve(), bbox_inches="tight")
+
     # Plot the epochs for QC
-    psd_plt = epochs.plot_psd(fmax=100, show=False)
-    psd_path = Path("results/plots/preprocessing/psd") / f"psd_sub-{subject_id}.png"
+    psd_plt = clean.compute_psd(fmax=100).plot(show=False)
+    psd_path = qc_dir / "psd_clean" / f"psd-clean_sub-{subject_id}.png"
     psd_path.parent.mkdir(parents=True, exist_ok=True)
     psd_plt.savefig(psd_path.resolve(), bbox_inches="tight")
-
+    
     # Plot ICA components
     ica_plt = ica.plot_components(show=False)
-    ica_path = Path("results/plots/preprocessing/ica") / f"ica_sub-{subject_id}.png"
+    ica_path = qc_dir / "ica" / f"ica_sub-{subject_id}.png"
     ica_path.parent.mkdir(parents=True, exist_ok=True)
     ica_plt.savefig(ica_path.resolve(), bbox_inches="tight")
 
     # Save the ICLabel exclusions as txt
-    iclabel_path = Path("results/plots/preprocessing/iclabel") / f"iclabel_sub-{subject_id}.txt"
+    iclabel_path = qc_dir / "iclabel" / f"iclabel_sub-{subject_id}.txt"
     iclabel_path.parent.mkdir(parents=True, exist_ok=True)
     with open(iclabel_path, "w") as f:
         f.write(f"ICA Exclusions for subject {subject_id}:\n")
