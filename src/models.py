@@ -42,7 +42,7 @@ class RandomForestStrategy(ModelStrategy):
         max_features: Optional[str] = None,
         random_state: int = 2001,
         scale: bool = True,
-        feature_type: str = "downsample"
+        feature_type: str = "stack"
     ):
         self.n_estimators = n_estimators
         self.max_features = max_features
@@ -85,7 +85,7 @@ class LogisticRegressionStrategy(ModelStrategy):
         solver: str = "saga",
         max_iter: int = 1000, 
         scale: bool = True,
-        feature_type: str = "downsample",
+        feature_type: str = "stack",
         l1_ratio: Optional[float] = 1
         ):
         self.solver = solver
@@ -159,10 +159,12 @@ class SVMStrategy(ModelStrategy):
 
 def create_features(x: np.ndarray, feature_type: str):
     """Create features from raw EEG data based on the specified feature type."""
-    if feature_type == "band_power":
+    if feature_type == "bandpower":
         return transform_to_band_power(x, sfreq=256)  # example sfreq, adjust as needed
     elif feature_type == "downsample":
         downsample = downsample_time(x, original_sfreq=256, target_sfreq=50)  # example sfreq, adjust as needed
         return downsample.reshape(downsample.shape[0], -1)
     elif feature_type == "stack":
         return x.reshape(x.shape[0], -1)
+    else:
+        raise ValueError(f"Unknown feature type: {feature_type}")

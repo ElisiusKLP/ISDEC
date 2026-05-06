@@ -1,3 +1,4 @@
+import click
 from matplotlib.pylab import plot
 import models
 import numpy as np
@@ -30,10 +31,17 @@ MODEL_REGISTRY = {
     "svm": models.SVMStrategy,
 }
 
-FEATURE_TYPES = ["downsample", "bandpower", "stack"]
+FEATURE_TYPES = [
+    "downsample", 
+    "bandpower", 
+    "stack"
+]
+
+MODEL_CHOICES = tuple(MODEL_REGISTRY.keys())
+FEATURE_CHOICES = tuple(FEATURE_TYPES)
 
 
-def get_model_strategy(model_name: str, scale: bool = True, feature_type: str = "downsample") -> ModelStrategy:
+def get_model_strategy(model_name: str, scale: bool = True, feature_type: str = "stack") -> ModelStrategy:
     """Get strategy for the specified model"""
     if model_name not in MODEL_REGISTRY:
         raise ValueError(
@@ -71,7 +79,7 @@ def fit_model(strategy: ModelStrategy, train_dir: Path, val_dir: Path):
 
         # Transform training data
         X_train = strategy.transform_train(X_train)
-        print(f"Data shape before feature extraction: \n X_train: {X_train.shape} \n y_train: {y_train.shape}")
+        print(f"Train shape before feature extraction: \n X_train: {X_train.shape} \n y_train: {y_train.shape}")
 
         # Train model
         model = strategy.create_model()
@@ -90,7 +98,7 @@ def fit_model(strategy: ModelStrategy, train_dir: Path, val_dir: Path):
 
         # Transform validation data using strategy
         x_val = strategy.transform_val(x_val)
-        print(f"Data shape after feature extraction: \n x_val: {x_val.shape} \n y_val: {y_val.shape}")
+        print(f"Validation shape after feature extraction: \n x_val: {x_val.shape} \n y_val: {y_val.shape}")
 
         # Evaluate
         y_pred = model.predict(x_val)
@@ -141,13 +149,21 @@ def fit_model(strategy: ModelStrategy, train_dir: Path, val_dir: Path):
     print(f"Saved scores to {score_log_path.resolve()}")
 
 def main(
-    model: str = typer.Option("random_forest", help="Type of model to train"),
-    scale: bool = typer.Option(True, "--scale/--no-scale", help="Enable feature scaling."),
-    feature: str = typer.Option("downsample", help="Type of features to create.")
+    model: str = typer.Option(
+        "random_forest",
+        help="Type of model to train",
+        click_type=click.Choice(MODEL_CHOICES),
+    ),
+    feature: str = typer.Option(
+        "stack",
+        help="Type of features to create.",
+        click_type=click.Choice(FEATURE_CHOICES),
+    ),
+    scale: bool = typer.Option(True, "--scale/--no-scale", help="Enable feature scaling.")
 ):
     print(f"Training model: {model}")
-    print(f"Scaling enabled: {scale}")
     print(f"Feature type: {feature}")
+    print(f"Scaling enabled: {scale}")
     strategy = get_model_strategy(model, scale=scale, feature_type=feature)
 
     fit_model(strategy, train_dir, val_dir)

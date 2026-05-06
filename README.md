@@ -19,6 +19,17 @@ Terminal should have (isdec) infront of user.
 
 ## Scripts
 
-### Dataset
-Run ``python src/dataset.py`` to convert the competition dataset matlab files into a python-friendly (numpy) format.
+### dataset.py
+Run ``uv run src/dataset.py`` to convert the competition dataset matlab files into a python-friendly (numpy) format.
+
+## classification.py
+Run ``uv run src/classification.py --model={{model_name}} --feature={{feature_type}} --scale/--no-scale``
+
+Model is either: logistic_regression, svm, random_forest
+
+Feature is either: bandpower, downsample, stack
+
+Run --help for an overview of the classification cli settings. ``uv run src/classification.py --help``
+
+
 
