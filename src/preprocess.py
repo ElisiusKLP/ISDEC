@@ -1,20 +1,24 @@
-from docutils.utils.math.latex2mathml import over
-import mne
 from pathlib import Path
 import re
-import tqdm
+from typing import Optional, Dict, List
+
 import joblib
+import mne
+import tqdm
+import typer
 from mne.preprocessing import ICA
 from mne_icalabel import label_components
+from rich import print
+
 from dataset import mne_to_dict
 
-#Load mne objects
 
 mne_dir = Path("data/derivatives/raw/mne")
 output_dir = Path("data/derivatives/preprocessed").absolute()
 output_dir.mkdir(parents=True, exist_ok=True)
 
-def describe_ica(ica_obj):
+
+def describe_ica(ica_obj: ICA) -> None:
     """Print key numeric attributes and shapes of an MNE ICA object."""
     print("Inspecting ICA object:")
     attrs = [
@@ -40,8 +44,101 @@ def describe_ica(ica_obj):
         else:
             print(f" - {attr}: <missing>")
 
-def preprocess(input_dir, set_type: str):
-    all_files = list(input_dir.glob('*.fif'))
+def label_ica_exclusion(ica: ICA, epochs: mne.Epochs, threshold: float = 0.8) -> List[int]:
+    """Return list of ICA component indices to exclude based on ICLabel."""
+    ic_labels = label_components(epochs, ica, "iclabel")
+    labels = ic_labels["labels"]
+    labels_probs = ic_labels["y_pred_proba"]
+    for label, prob in zip(labels, labels_probs):
+        print(f"Component labeled as {label} with probability {prob:.2f}")
+    exclude_idx = [
+        idx
+        for idx, label in enumerate(labels)
+        if label not in ["brain", "other"] and labels_probs[idx] >= threshold
+    ]
+    print(f"Excluding components {exclude_idx}")
+    return exclude_idx
+
+
+def QC(
+    clean: mne.Epochs, 
+    raw: mne.BaseEpochs, 
+    ica: Optional[ICA], 
+    subject_id: str, 
+    ICLabel_exclusions: Dict[int, Dict],
+    set_type: str
+) -> None:
+    """Save QC plots and ICLabel exclusions. If `ica` is None, skip ICA plots."""
+    qc_dir = Path("results/preprocessing/") / set_type
+
+    # RAW PSD
+    raw_plt = raw.compute_psd(fmax=100).plot(show=False)
+    raw_path = qc_dir / "psd_raw" / f"psd-raw_sub-{subject_id}.png"
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_plt.savefig(raw_path.resolve(), bbox_inches="tight")
+
+    # RAW EVOKED
+    # create the evokeds for each condition and plot them
+    try:
+        evokeds_dict = {cond: raw[cond].average() for cond in raw.event_id.keys()}
+        evoked_plt = mne.viz.plot_compare_evokeds(evokeds_dict, show=False, combine="mean")
+        evoked_path = qc_dir / "evoked_raw" / f"evoked-raw_sub-{subject_id}.png"
+        evoked_path.parent.mkdir(parents=True, exist_ok=True)
+        # save the figure and not list
+        print(f"evoked_plt type: {type(evoked_plt)}")
+        print(f"evoked obj {evoked_plt}")
+        evoked_plt[0].savefig(evoked_path.resolve(), bbox_inches="tight")
+    except Exception as e:
+        raise ValueError(f"Failed to plot evoked potentials: {e}")
+
+    # CLEAN EVOKED
+    try:
+        clean_evokeds_dict = {cond: clean[cond].average() for cond in clean.event_id.keys()}
+        clean_evoked_plt = mne.viz.plot_compare_evokeds(clean_evokeds_dict, show=False, combine="mean")
+        clean_evoked_path = qc_dir / "evoked_clean" / f"evoked-clean_sub-{subject_id}.png"
+        clean_evoked_path.parent.mkdir(parents=True, exist_ok=True)
+        clean_evoked_plt[0].savefig(clean_evoked_path.resolve(), bbox_inches="tight")
+    except Exception as e:
+        raise ValueError(f"Failed to plot clean evoked potentials: {e}")
+
+    # CLEAN PSD
+    psd_plt = clean.compute_psd(fmax=100).plot(show=False)
+    psd_path = qc_dir / "psd_clean" / f"psd-clean_sub-{subject_id}.png"
+    psd_path.parent.mkdir(parents=True, exist_ok=True)
+    psd_plt.savefig(psd_path.resolve(), bbox_inches="tight")
+
+    if ica is not None:
+        try:
+            ica_plt = ica.plot_components(show=False)
+            ica_path = qc_dir / "ica" / f"ica_sub-{subject_id}.png"
+            ica_path.parent.mkdir(parents=True, exist_ok=True)
+            ica_plt.savefig(ica_path.resolve(), bbox_inches="tight")
+        except Exception as e:
+            print(f"Failed to plot ICA components: {e}")
+    else:
+        print("Skipping ICA component plot (ICA not used)")
+
+    iclabel_path = qc_dir / "iclabel" / f"iclabel_sub-{subject_id}.txt"
+    iclabel_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(iclabel_path, "w") as f:
+        f.write(f"ICA Exclusions for subject {subject_id}:\n")
+        if ICLabel_exclusions:
+            for idx, info in ICLabel_exclusions.items():
+                f.write(f"Component {idx}: Label={info['label']}, Probability={info['prob']:.2f}\n")
+        else:
+            f.write("ICA not applied for this subject.\n")
+
+    print(f"Saved QC plots and ICLabel exclusions for subject {subject_id}")
+
+
+def preprocess(input_dir: Path, set_type: str, use_ica: bool = True) -> None:
+    """Preprocess all .fif epoch files in `input_dir`.
+
+    If `use_ica` is True, fit ICA on the training set and save it; for non-training
+    partitions the ICA from the training set will be loaded and applied. If False,
+    ICA and ICLabel steps are skipped entirely.
+    """
+    all_files = list(input_dir.glob("*.fif"))
 
     for file in tqdm.tqdm(all_files, desc="Preprocessing files"):
         match = re.search(r"epochs_sub-(\d{2})-epo\.fif", file.name)
@@ -53,82 +150,77 @@ def preprocess(input_dir, set_type: str):
 
         subject_file = mne.read_epochs(file)
 
-        epochs = subject_file.copy().filter(
-            l_freq=1.0, 
-            h_freq=100.0,
-            method="iir",
-        ) # ICLabel is trained on this this bandpass filter
-
+        epochs = subject_file.copy().filter(l_freq=1.0, h_freq=100.0, method="iir")
         epochs.set_eeg_reference(ref_channels="average")
 
-        #ICA should be done before baseline correcting
-        if set_type == "training_set": # Only do ICA on training set to avoid data leakage
+        ica: Optional[ICA] = None
+
+        if use_ica and set_type == "training_set":
             ica = ICA(
-                n_components=20, 
+                n_components=20,
                 max_iter="auto",
                 random_state=2001,
-                method="infomax", # ICLabel method
-                fit_params=dict(extended=True) #ICLabel method
+                method="infomax",
+                fit_params=dict(extended=True),
             )
-            
+
             ica_filename = output_dir / "ica" / set_type / f"ica_sub-{sub_id}-ica.fif"
-            ica_filename.parent.mkdir(parents=True, exist_ok=True) # Create the directory if it doesn't exist
+            ica_filename.parent.mkdir(parents=True, exist_ok=True)
 
             ica.fit(epochs.copy())
             describe_ica(ica)
             print(f"ICA n_components_={getattr(ica, 'n_components_', None)} for subject {sub_id}")
             ica.save(ica_filename, overwrite=True)
             print(f"Saved ICA solution to {ica_filename}")
-        else:
-            # load ICA solution from training set
+        elif use_ica and set_type != "training_set":
+            # if validation_set or test_set, load ICA solution from training set
             ica_filename = output_dir / "ica" / "training_set" / f"ica_sub-{sub_id}-ica.fif"
             if not ica_filename.exists():
                 raise ValueError(f"ICA file not found: {ica_filename}")
             ica = mne.preprocessing.read_ica(ica_filename)
             print(f"Loaded ICA solution from {ica_filename}")
+        else:
+            print("ICA disabled for this run; skipping ICA and ICLabel steps.")
 
-        # ICLabeling
-        ic_labels = label_components(epochs, ica, 'iclabel')
-        labels = ic_labels['labels']
-        labels_probs = ic_labels['y_pred_proba']
-        # print each labal and its probability
-        for label, prob in zip(labels, labels_probs):
-            print(f"Component labeled as {label} with probability {prob:.2f}")
-        threshold = 0.8
-        exclude_idx = [
-            idx for idx, label in enumerate(labels) if label not in ["brain", "other"]
-            and labels_probs[idx] >= threshold
-        ]
-        print(f"Excluding components {exclude_idx}")
+        ICLabel_exclusions: Dict[int, Dict] = {}
 
-        # Apply ICA
-        ica.exclude = exclude_idx
-        ica.apply(epochs)
+        if ica is not None:
+            # ICLabeling
+            ic_labels = label_components(epochs, ica, "iclabel")
+            labels = ic_labels["labels"]
+            labels_probs = ic_labels["y_pred_proba"]
+            for label, prob in zip(labels, labels_probs):
+                print(f"Component labeled as {label} with probability {prob:.2f}")
+            threshold = 0.8
+            keep_labels = ["brain", "other", "muscle"]
+            exclude_idx = [
+                idx for idx, label in enumerate(labels) if label not in keep_labels and labels_probs[idx] >= threshold
+            ]
+            print(f"Excluding components {exclude_idx}")
+
+            ica.exclude = exclude_idx
+            ica.apply(epochs)
+
+            ICLabel_exclusions = {
+                idx: {"label": labels[idx], "prob": labels_probs[idx]} for idx in exclude_idx
+            }
+        else:
+            ICLabel_exclusions = {}
 
         # Baseline correction
         epochs.apply_baseline((-0.5, 0))
 
         # Filter
-        epochs.filter(
-            l_freq=1.0, 
-            h_freq=40.0,
-            method="iir",
-        )
+        epochs.filter(l_freq=1.0, h_freq=40.0, method="iir")
 
-        # Plot the epochs for QC
-        ICLabel_exclusions = {
-            idx: {
-                "label": labels[idx], 
-                "prob": labels_probs[idx]
-                } for idx in exclude_idx
-            }
         print(f"ICLabel_exclusions: {ICLabel_exclusions}")
         QC(
             clean=epochs, 
-            raw=subject_file,
+            raw=subject_file, 
             ica=ica,
             subject_id=sub_id, 
-            ICLabel_exclusions=ICLabel_exclusions
+            ICLabel_exclusions=ICLabel_exclusions,
+            set_type=set_type
         )
 
         # Save preprocessed epochs
@@ -143,57 +235,15 @@ def preprocess(input_dir, set_type: str):
         preprocessed_data = mne_to_dict(epochs, sub_id)
         joblib.dump(preprocessed_data, joblib_filename)
 
-# https://mne.tools/mne-icalabel/stable/generated/examples/00_iclabel.html#sphx-glr-generated-examples-00-iclabel-py 
 
-def label_ica_exclusion(ica, epochs, threshold=0.8):
-    ic_labels = label_components(epochs, ica, 'iclabel')
-    labels = ic_labels['labels']
-    labels_probs = ic_labels['y_pred_proba']
-    for label, prob in zip(labels, labels_probs):
-        print(f"Component labeled as {label} with probability {prob:.2f}")
-    exclude_idx = [
-        idx for idx, label in enumerate(labels) if label not in ["brain", "other"]
-        and labels_probs[idx] >= threshold
-    ]
-    print(f"Excluding components {exclude_idx}")
-    return exclude_idx
-
-def QC(clean, raw, ica, subject_id, ICLabel_exclusions: dict):
-    """Save plots to investigate the prepreocessing quality"""
-    qc_dir = Path("results/preprocessing")
-
-    # Plot the raw epochs for QC
-    raw_plt = raw.compute_psd(fmax=100).plot(show=False)
-    raw_path = qc_dir / "psd_raw" / f"psd-raw_sub-{subject_id}.png"
-    raw_path.parent.mkdir(parents=True, exist_ok=True)
-    raw_plt.savefig(raw_path.resolve(), bbox_inches="tight")
-
-    # Plot the epochs for QC
-    psd_plt = clean.compute_psd(fmax=100).plot(show=False)
-    psd_path = qc_dir / "psd_clean" / f"psd-clean_sub-{subject_id}.png"
-    psd_path.parent.mkdir(parents=True, exist_ok=True)
-    psd_plt.savefig(psd_path.resolve(), bbox_inches="tight")
-    
-    # Plot ICA components
-    ica_plt = ica.plot_components(show=False)
-    ica_path = qc_dir / "ica" / f"ica_sub-{subject_id}.png"
-    ica_path.parent.mkdir(parents=True, exist_ok=True)
-    ica_plt.savefig(ica_path.resolve(), bbox_inches="tight")
-
-    # Save the ICLabel exclusions as txt
-    iclabel_path = qc_dir / "iclabel" / f"iclabel_sub-{subject_id}.txt"
-    iclabel_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(iclabel_path, "w") as f:
-        f.write(f"ICA Exclusions for subject {subject_id}:\n")
-        for idx, info in ICLabel_exclusions.items():
-            f.write(f"Component {idx}: Label={info['label']}, Probability={info['prob']:.2f}\n")
-
-    print(f"Saved QC plots and ICLabel exclusions for subject {subject_id}")
+def main(ica: bool = typer.Option(True, "--ica/--no-ica", help="Include ICA in preprocessing.")) -> None:
+    """Run preprocessing across data partitions. Use `--no-ica` to skip ICA steps."""
+    data_partitions = ["training_set", "validation_set", "test_set"]
+    for partition in data_partitions:
+        print(f"Preprocessing {partition} (ICA={'enabled' if ica else 'disabled'})...")
+        input_dir = mne_dir / partition
+        preprocess(input_dir, partition, use_ica=ica)
 
 
 if __name__ == "__main__":
-    data_partitions = ["training_set", "validation_set", "test_set"]
-    for partition in data_partitions:
-        print(f"Preprocessing {partition}...")
-        input_dir = mne_dir / partition
-        preprocess(input_dir, partition)
+    typer.run(main)

@@ -30,14 +30,20 @@ MODEL_REGISTRY = {
     "svm": models.SVMStrategy,
 }
 
+FEATURE_TYPES = ["downsample", "bandpower", "stack"]
 
-def get_model_strategy(model_name: str, scale: bool = True) -> ModelStrategy:
+
+def get_model_strategy(model_name: str, scale: bool = True, feature_type: str = "downsample") -> ModelStrategy:
     """Get strategy for the specified model"""
     if model_name not in MODEL_REGISTRY:
         raise ValueError(
             f"Unknown model: {model_name}. Available: {list(MODEL_REGISTRY.keys())}"
         )
-    return MODEL_REGISTRY[model_name](scale=scale)
+    if feature_type not in FEATURE_TYPES:
+        raise ValueError(
+            f"Unknown feature type: {feature_type}. Available: {FEATURE_TYPES}"
+        )
+    return MODEL_REGISTRY[model_name](scale=scale, feature_type=feature_type)
 
 
 # ============================================================================
@@ -53,6 +59,7 @@ def fit_model(strategy: ModelStrategy, train_dir: Path, val_dir: Path):
     # setup a score logger
     score_logger = []
     scale_tag = 'scale' if strategy.scale else 'no_scale'
+    feature_tag = strategy.feature_type
 
     for file in tqdm(train_files, desc="Training models on subjects"):
         print(f"Classifying on file: {file.name}")
@@ -64,8 +71,7 @@ def fit_model(strategy: ModelStrategy, train_dir: Path, val_dir: Path):
 
         # Transform training data
         X_train = strategy.transform_train(X_train)
-        print(f"x_train shape: {X_train.shape}")
-        print(f"y_train shape: {y_train.shape}")
+        print(f"Data shape before feature extraction: \n X_train: {X_train.shape} \n y_train: {y_train.shape}")
 
         # Train model
         model = strategy.create_model()
@@ -84,6 +90,7 @@ def fit_model(strategy: ModelStrategy, train_dir: Path, val_dir: Path):
 
         # Transform validation data using strategy
         x_val = strategy.transform_val(x_val)
+        print(f"Data shape after feature extraction: \n x_val: {x_val.shape} \n y_val: {y_val.shape}")
 
         # Evaluate
         y_pred = model.predict(x_val)
@@ -110,7 +117,7 @@ def fit_model(strategy: ModelStrategy, train_dir: Path, val_dir: Path):
         plt_filepath = Path(f"results/plots/accuracy/{strategy.get_name()}")
         plt_filepath.mkdir(parents=True, exist_ok=True)
         fig = disp.ax_.figure
-        fig.savefig(plt_filepath / f"{strategy.get_name()}__{scale_tag}_{file.stem}_confusion_matrix.png")
+        fig.savefig(plt_filepath / f"{strategy.get_name()}_{scale_tag}_{file.stem}_confusion_matrix.png")
     
     # save all images into a single grid in a pdf
     tags = ["preprocessed", "raw"]
@@ -136,11 +143,12 @@ def fit_model(strategy: ModelStrategy, train_dir: Path, val_dir: Path):
 def main(
     model: str = typer.Option("random_forest", help="Type of model to train"),
     scale: bool = typer.Option(True, "--scale/--no-scale", help="Enable feature scaling."),
+    feature: str = typer.Option("downsample", help="Type of features to create.")
 ):
     print(f"Training model: {model}")
     print(f"Scaling enabled: {scale}")
-
-    strategy = get_model_strategy(model, scale=scale)
+    print(f"Feature type: {feature}")
+    strategy = get_model_strategy(model, scale=scale, feature_type=feature)
 
     fit_model(strategy, train_dir, val_dir)
 

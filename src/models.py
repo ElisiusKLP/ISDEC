@@ -5,6 +5,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from features import transform_to_band_power, downsample_time
 
 # ============================================================================
 # Model Strategies - Each model defines its own transformation and fitting
@@ -41,19 +42,21 @@ class RandomForestStrategy(ModelStrategy):
         max_features: Optional[str] = None,
         random_state: int = 2001,
         scale: bool = True,
+        feature_type: str = "downsample"
     ):
         self.n_estimators = n_estimators
         self.max_features = max_features
         self.random_state = random_state
         self.scale = scale
+        self.feature_type = feature_type
 
     def transform_train(self, x: np.ndarray) -> np.ndarray:
         """Reshape to (n_samples, n_features)"""
-        return x.reshape(x.shape[0], -1)
+        return create_features(x, feature_type=self.feature_type)
 
     def transform_val(self, x: np.ndarray) -> np.ndarray:
         """Reshape to (n_samples, n_features)"""
-        return x.reshape(x.shape[0], -1)
+        return create_features(x, feature_type=self.feature_type)
 
     def create_model(self) -> Pipeline:
         """Create a pipeline with optional scaling and Random Forest classifier"""
@@ -77,18 +80,26 @@ class RandomForestStrategy(ModelStrategy):
 
 
 class LogisticRegressionStrategy(ModelStrategy):
-    def __init__(self, solver: str = "lbfgs", max_iter: int = 1000, scale: bool = True):
+    def __init__(
+        self, 
+        solver: str = "saga",
+        max_iter: int = 1000, 
+        scale: bool = True,
+        feature_type: str = "downsample",
+        l1_ratio: Optional[float] = 1
+        ):
         self.solver = solver
         self.max_iter = max_iter
         self.scale = scale
-
+        self.feature_type = feature_type
+        self.l1_ratio = l1_ratio
     def transform_train(self, x: np.ndarray) -> np.ndarray:
         """Flatten to (n_samples, n_features)"""
-        return x.reshape(x.shape[0], -1)
+        return create_features(x, feature_type=self.feature_type)
 
     def transform_val(self, x: np.ndarray) -> np.ndarray:
         """Same transformation as training"""
-        return x.reshape(x.shape[0], -1)
+        return create_features(x, feature_type=self.feature_type)
 
     def create_model(self) -> Pipeline:
         """Create a pipeline with optional scaling and Logistic Regression classifier"""
@@ -98,7 +109,11 @@ class LogisticRegressionStrategy(ModelStrategy):
         steps.append(
             (
                 "classifier",
-                LogisticRegression(solver=self.solver, max_iter=self.max_iter),
+                LogisticRegression(
+                    solver=self.solver, 
+                    max_iter=self.max_iter,
+                    l1_ratio=self.l1_ratio
+                ),
             )
         )
         return Pipeline(steps=steps)
@@ -107,18 +122,19 @@ class LogisticRegressionStrategy(ModelStrategy):
         return "logistic_regression"
 
 class SVMStrategy(ModelStrategy):
-    def __init__(self, kernel: str = "rbf", C: float = 1.0, scale: bool = True):
+    def __init__(self, kernel: str = "rbf", C: float = 1.0, scale: bool = True, feature_type: str = "downsample"):
         self.kernel = kernel
         self.C = C
         self.scale = scale
+        self.feature_type = feature_type
 
     def transform_train(self, x: np.ndarray) -> np.ndarray:
         """Flatten to (n_samples, n_features)"""
-        return x.reshape(x.shape[0], -1)
+        return create_features(x, feature_type=self.feature_type)
 
     def transform_val(self, x: np.ndarray) -> np.ndarray:
         """Same transformation as training"""
-        return x.reshape(x.shape[0], -1)
+        return create_features(x, feature_type=self.feature_type)
 
     def create_model(self) -> Pipeline:
         """Create a pipeline with optional scaling and SVM classifier"""
@@ -137,3 +153,16 @@ class SVMStrategy(ModelStrategy):
 
     def get_name(self) -> str:
         return "svm"
+
+# =======
+# Create Features
+
+def create_features(x: np.ndarray, feature_type: str):
+    """Create features from raw EEG data based on the specified feature type."""
+    if feature_type == "band_power":
+        return transform_to_band_power(x, sfreq=256)  # example sfreq, adjust as needed
+    elif feature_type == "downsample":
+        downsample = downsample_time(x, original_sfreq=256, target_sfreq=50)  # example sfreq, adjust as needed
+        return downsample.reshape(downsample.shape[0], -1)
+    elif feature_type == "stack":
+        return x.reshape(x.shape[0], -1)
