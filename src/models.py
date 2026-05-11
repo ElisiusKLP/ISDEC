@@ -5,7 +5,12 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from features import transform_to_band_power, downsample_time
+from features import (
+    transform_to_band_power,
+    downsample_time,
+    transform_to_band_phase,
+    transform_to_band_power_with_phase,
+)
 
 # ============================================================================
 # Model Strategies - Each model defines its own transformation and fitting
@@ -83,7 +88,7 @@ class LogisticRegressionStrategy(ModelStrategy):
     def __init__(
         self, 
         solver: str = "saga",
-        max_iter: int = 1000, 
+        max_iter: int = 5000, 
         scale: bool = True,
         feature_type: str = "stack",
         l1_ratio: Optional[float] = 1
@@ -155,12 +160,20 @@ class SVMStrategy(ModelStrategy):
         return "svm"
 
 # =======
-# Create Features
+# == Create Features function
+# =======
 
 def create_features(x: np.ndarray, feature_type: str):
     """Create features from raw EEG data based on the specified feature type."""
     if feature_type == "bandpower":
         return transform_to_band_power(x, sfreq=256)  # example sfreq, adjust as needed
+    elif feature_type == "bandphase":
+        return transform_to_band_phase(x, sfreq=256)
+    elif feature_type == "bandpower_phase":
+        return transform_to_band_power_with_phase(
+            x,
+            sfreq=256,
+        )
     elif feature_type == "downsample":
         downsample = downsample_time(x, original_sfreq=256, target_sfreq=50)  # example sfreq, adjust as needed
         return downsample.reshape(downsample.shape[0], -1)
