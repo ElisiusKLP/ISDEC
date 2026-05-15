@@ -19,6 +19,7 @@ from rich import print
 # Import feature extraction functions
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from models import create_features as create_model_features
 from features import (
     transform_to_band_power,
     downsample_time,
@@ -44,7 +45,7 @@ DEFAULT_BANDS = {
     "theta": (4.0, 8.0),
     "alpha": (8.0, 13.0),
     "beta": (13.0, 30.0),
-    "gamma": (30.0, 45.0),
+    "gamma": (30.0, 100.0),
 }
 
 # ============================================================================
@@ -436,6 +437,118 @@ def plot_time_frequency_features(
     return fig
 
 
+def plot_band_aggregated_time_frequency_features(
+    X_raw: np.ndarray,
+    X_tf: np.ndarray,
+    sfreq: float,
+    subject_name: str,
+    bands: dict[str, tuple[float, float]],
+    downsample_to_freq: float,
+):
+    """
+    Visualize band-aggregated Morlet time-frequency features.
+    """
+    n_epochs, n_channels, n_timepoints = X_raw.shape
+    n_bands = len(bands)
+    downsampled_n_timepoints = max(1, int(np.round(n_timepoints * (downsample_to_freq / sfreq))))
+    tf_reshaped = X_tf.reshape(n_epochs, n_channels, n_bands, downsampled_n_timepoints)
+
+    fig = plt.figure(figsize=(14, 8))
+    gs = gridspec.GridSpec(2, 2, figure=fig)
+
+    ax1 = fig.add_subplot(gs[0, 0])
+    time = np.arange(n_timepoints) / sfreq
+    ax1.plot(time, X_raw[0, 0, :], color='steelblue', alpha=0.7)
+    ax1.set_xlabel("Time (s)")
+    ax1.set_ylabel("Amplitude")
+    ax1.set_title("Raw Signal (Epoch 0, Channel 0)")
+    ax1.grid(alpha=0.3)
+
+    ax2 = fig.add_subplot(gs[0, 1])
+    im = ax2.imshow(tf_reshaped[0, 0], aspect='auto', origin='lower', cmap='viridis')
+    ax2.set_xlabel("Downsampled Time Index")
+    ax2.set_ylabel("Band")
+    ax2.set_yticks(range(n_bands))
+    ax2.set_yticklabels(list(bands.keys()))
+    ax2.set_title("Band-Aggregated Morlet Amplitude (Epoch 0, Channel 0)")
+    plt.colorbar(im, ax=ax2, label='Amplitude')
+
+    ax3 = fig.add_subplot(gs[1, 0])
+    mean_per_band = tf_reshaped.mean(axis=(0, 1, 3))
+    ax3.bar(range(n_bands), mean_per_band, color='coral')
+    ax3.set_xlabel("Band")
+    ax3.set_ylabel("Mean Amplitude")
+    ax3.set_xticks(range(n_bands))
+    ax3.set_xticklabels(list(bands.keys()))
+    ax3.set_title("Mean Band-Aggregated Amplitude")
+    ax3.grid(alpha=0.3, axis='y')
+
+    ax4 = fig.add_subplot(gs[1, 1])
+    ax4.hist(X_tf.flatten(), bins=50, alpha=0.75, edgecolor='black')
+    ax4.set_xlabel("Feature Value")
+    ax4.set_ylabel("Frequency")
+    ax4.set_title("Distribution of Band-Aggregated Time-Frequency Features")
+    ax4.grid(alpha=0.3)
+
+    fig.suptitle(f"Morlet Band-Aggregated Time-Frequency Extraction — {subject_name}", fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    return fig
+
+
+def plot_dwt_time_frequency_features(
+    X_raw: np.ndarray,
+    X_dwt: np.ndarray,
+    subject_name: str,
+):
+    """
+    Visualize DWT-based features with a compact summary plot.
+    """
+    n_epochs, n_channels, n_timepoints = X_raw.shape
+    feature_lengths = np.array([X_dwt.shape[1]] * n_epochs)
+
+    fig = plt.figure(figsize=(14, 8))
+    gs = gridspec.GridSpec(2, 2, figure=fig)
+
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax1.plot(X_raw[0, 0, :], color='steelblue', alpha=0.7)
+    ax1.set_xlabel("Time Index")
+    ax1.set_ylabel("Amplitude")
+    ax1.set_title("Raw Signal (Epoch 0, Channel 0)")
+    ax1.grid(alpha=0.3)
+
+    ax2 = fig.add_subplot(gs[0, 1])
+    ax2.hist(X_dwt.flatten(), bins=50, alpha=0.75, edgecolor='black', color='darkseagreen')
+    ax2.set_xlabel("Feature Value")
+    ax2.set_ylabel("Frequency")
+    ax2.set_title("Distribution of DWT Features")
+    ax2.grid(alpha=0.3)
+
+    ax3 = fig.add_subplot(gs[1, 0])
+    ax3.bar([0], [X_dwt.shape[1]], color='slateblue')
+    ax3.set_xticks([0])
+    ax3.set_xticklabels(["DWT"])
+    ax3.set_ylabel("Feature Length")
+    ax3.set_title("DWT Feature Vector Length")
+    ax3.grid(alpha=0.3, axis='y')
+
+    ax4 = fig.add_subplot(gs[1, 1])
+    info = [
+        f"Epochs: {n_epochs}",
+        f"Channels: {n_channels}",
+        f"Original timepoints: {n_timepoints}",
+        f"DWT feature length: {X_dwt.shape[1]}",
+        f"Mean feature length per epoch: {feature_lengths.mean():.0f}",
+    ]
+    ax4.text(0.05, 0.5, '\n'.join(info), fontsize=11, verticalalignment='center',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5), family='monospace')
+    ax4.axis('off')
+    ax4.set_title("DWT Summary")
+
+    fig.suptitle(f"DWT Time-Frequency Extraction — {subject_name}", fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    return fig
+
+
 # ============================================================================
 # Main Testing Function
 # ============================================================================
@@ -554,16 +667,61 @@ def test_feature_extraction(n_subjects: int = 5, sfreq: float = 200.0):
 
         try:
             # ================================================================
-            # Test 5: Time-Frequency Extraction
+            # Test 5: Morlet Time-Frequency Extraction
             # ================================================================
-            print(f"  Testing time-frequency extraction...", end=" ")
-            X_tf = transform_to_time_frequency(X, sfreq=sfreq, algorithm="morlet")
+            print(f"  Testing Morlet time-frequency extraction...", end=" ")
+            X_tf = create_model_features(X, feature_type="tfr_morlet")
             if X_tf is None:
                 raise ValueError("Time-frequency transform returned None")
             print(f"✓ shape: {X_tf.shape}")
 
             fig = plot_time_frequency_features(X, X_tf, sfreq, subject_name, n_freqs=20)
-            fig_path = subject_dir / f"{subject_name}_time_frequency.png"
+            fig_path = subject_dir / f"{subject_name}_time_frequency_morlet.png"
+            fig.savefig(fig_path, dpi=100, bbox_inches='tight')
+            plt.close(fig)
+            print(f"    Saved: {fig_path.name}")
+
+        except Exception as e:
+            print(f"✗ Error: {e}")
+
+        try:
+            # ================================================================
+            # Test 6: Band-Aggregated Morlet Time-Frequency Extraction
+            # ================================================================
+            print(f"  Testing Morlet band-aggregated time-frequency extraction...", end=" ")
+            X_tf_bands = create_model_features(X, feature_type="tfr_morlet_bands")
+            if X_tf_bands is None:
+                raise ValueError("Band-aggregated time-frequency transform returned None")
+            print(f"✓ shape: {X_tf_bands.shape}")
+
+            fig = plot_band_aggregated_time_frequency_features(
+                X,
+                X_tf_bands,
+                sfreq,
+                subject_name,
+                bands=DEFAULT_BANDS,
+                downsample_to_freq=4,
+            )
+            fig_path = subject_dir / f"{subject_name}_time_frequency_morlet_bands.png"
+            fig.savefig(fig_path, dpi=100, bbox_inches='tight')
+            plt.close(fig)
+            print(f"    Saved: {fig_path.name}")
+
+        except Exception as e:
+            print(f"✗ Error: {e}")
+
+        try:
+            # ================================================================
+            # Test 7: DWT Time-Frequency Extraction
+            # ================================================================
+            print(f"  Testing DWT time-frequency extraction...", end=" ")
+            X_tf_dwt = create_model_features(X, feature_type="tfr_dwt_cmor")
+            if X_tf_dwt is None:
+                raise ValueError("DWT time-frequency transform returned None")
+            print(f"✓ shape: {X_tf_dwt.shape}")
+
+            fig = plot_dwt_time_frequency_features(X, X_tf_dwt, subject_name)
+            fig_path = subject_dir / f"{subject_name}_time_frequency_dwt.png"
             fig.savefig(fig_path, dpi=100, bbox_inches='tight')
             plt.close(fig)
             print(f"    Saved: {fig_path.name}")

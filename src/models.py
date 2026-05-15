@@ -268,14 +268,22 @@ def create_features(x: np.ndarray, feature_type: str):
 
     if feature_type == "tfr_morlet":
         return transform_to_time_frequency(x, sfreq=256, algorithm="morlet")
+    elif feature_type == "tfr_morlet_bands":
+        tfr = transform_to_time_frequency(
+            x, sfreq=256, algorithm="morlet",
+            in_bands=True, bands=bands,
+            downsample_to_freq=1,  # example downsampling to reduce dimensionality
+            n_freqs=20
+        )
+        return tfr
     elif feature_type == "tfr_dwt_cmor":
         return transform_to_time_frequency(x, sfreq=256, algorithm="dwt")
     elif feature_type == "tfr_pca":
-        trf = transform_to_time_frequency(x, sfreq=256, algorithm="morlet")
-        trf_pca = pca_feature_selection(trf, n_components=20)
-        return trf_pca
+        tfr = transform_to_time_frequency(x, sfreq=256, algorithm="morlet")
+        tfr_pca = pca_feature_selection(tfr, n_components=20)
+        return tfr_pca
     elif feature_type == "bandpower_nostack":
-        return transform_to_band_power(x, sfreq=256, mean=False, stack_channels=False)
+        return transform_to_band_power(x, sfreq=256, bands=bands,mean=False, stack_channels=False)
     elif feature_type == "bandpower_mean":
         return transform_to_band_power(
             x, sfreq=256, bands=bands,

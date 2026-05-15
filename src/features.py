@@ -18,7 +18,7 @@ def _validate_band_range(freq_range: tuple[float, float], sfreq: float) -> None:
 def transform_to_band_power(
     x: np.ndarray,
     sfreq: float,
-    bands: dict[str, tuple[float, float]] | None = None,
+    bands: dict[str, tuple[float, float]],
     mean: bool = True,
     stack_channels: bool = True
 ) -> np.ndarray:
@@ -42,13 +42,7 @@ def transform_to_band_power(
     """
 
     if bands is None:
-        bands = {
-            "delta": (1, 4),
-            "theta": (4, 8),
-            "alpha": (8, 13),
-            "beta": (13, 30),
-            "gamma": (30, 45),
-        }
+        raise ValueError("bands dictionary must be provided")
 
     n_epochs, n_channels, _ = x.shape
 
@@ -90,17 +84,65 @@ def transform_to_time_frequency(
     x: np.ndarray, 
     sfreq: float,
     algorithm: Literal["morlet", "dwt"] = "morlet",
+    in_bands: bool = False,
+    downsample_to_freq: float | None = None,
+    bands: dict[str, tuple[float, float]] | None = None,
+    n_freqs: int = 20,
     ) -> np.ndarray:
-    """Transform raw EEG data into time-frequency features using MNE Morlet wavelets."""
+    """Transform EEG data into time-frequency features.
+
+    For Morlet transforms:
+    - in_bands=False returns flattened power across all frequency bins and timepoints.
+    - in_bands=True returns flattened band-aggregated amplitude across timepoints.
+    """
     if x.ndim != 3:
         raise ValueError(f"Expected x with shape (epochs, channels, timepoints), got {x.shape}")
+    if n_freqs < 2:
+        raise ValueError(f"n_freqs must be >= 2, got {n_freqs}")
 
     n_epochs, n_channels, n_timepoints = x.shape
 
     if algorithm == "morlet":
-            
-        freqs = np.logspace(np.log10(1), np.log10(100), num=20)  # example frequencies
+
+        # specifiy the frequency intervals for the Morlet wavelets. Logarithmic spacing is common for EEG.
+        freqs = np.logspace(np.log10(1), np.log10(100), num=n_freqs)
         n_cycles = freqs / 2.0  # example: more cycles for higher freqs
+
+        if in_bands:
+            if bands is None:
+                raise ValueError("bands dictionary must be provided when in_bands=True")
+
+            complex_tfr = mne.time_frequency.tfr_array_morlet(
+                x,
+                sfreq=sfreq,
+                freqs=freqs,
+                n_cycles=n_cycles,
+                output="complex",
+                verbose=False,
+            )
+            amplitude = np.abs(complex_tfr)
+
+            band_amplitude_blocks = []
+            for band_name, (fmin, fmax) in bands.items():
+                _validate_band_range((fmin, fmax), sfreq)
+                freq_mask = (freqs >= fmin) & (freqs <= fmax)
+                if not np.any(freq_mask):
+                    raise ValueError(
+                        f"Band '{band_name}' ({fmin}, {fmax}) has no sampled Morlet frequencies. "
+                        f"Increase n_freqs or adjust bands."
+                    )
+                band_amplitude_blocks.append(amplitude[:, :, freq_mask, :].mean(axis=2))
+
+            band_amplitude = np.stack(band_amplitude_blocks, axis=2)
+            # Optionally downsample the time axis of the band-amplitude representation
+            if downsample_to_freq is not None:
+                from scipy.signal import resample
+                if downsample_to_freq <= 0:
+                    raise ValueError(f"downsample_to_freq must be > 0, got {downsample_to_freq}")
+                new_n_timepoints = max(1, int(np.round(n_timepoints * (downsample_to_freq / sfreq))))
+                band_amplitude = resample(band_amplitude, new_n_timepoints, axis=-1)
+
+            return band_amplitude.reshape(n_epochs, n_channels * band_amplitude.shape[2] * band_amplitude.shape[3])
 
         power = mne.time_frequency.tfr_array_morlet(
             x,
@@ -111,6 +153,12 @@ def transform_to_time_frequency(
             verbose=False,
         )
         # power shape: (epochs, channels, freqs, timepoints)
+        if downsample_to_freq is not None:
+            from scipy.signal import resample
+            if downsample_to_freq <= 0:
+                raise ValueError(f"downsample_to_freq must be > 0, got {downsample_to_freq}")
+            new_n_timepoints = max(1, int(np.round(n_timepoints * (downsample_to_freq / sfreq))))
+            power = resample(power, new_n_timepoints, axis=-1)
 
         return power.reshape(n_epochs, n_channels * power.shape[2] * power.shape[3])
 

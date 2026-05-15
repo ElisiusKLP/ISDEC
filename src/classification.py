@@ -6,6 +6,7 @@ import re
 import sklearn
 import joblib
 import typer
+import time
 from rich import print
 from pathlib import Path
 from sklearn.metrics import accuracy_score, confusion_matrix
@@ -36,6 +37,7 @@ MODEL_REGISTRY = {
 FEATURE_TYPES = [
     "downsample", 
     "tfr_morlet",
+    "tfr_morlet_bands",
     "tfr_dwt_cmor",
     "tfr_pca",
     "bandpower_mean",
@@ -106,6 +108,29 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
     feature_tag = strategy_feature_type
     run_tag = f"{strategy.get_name()}_{feature_tag}_{scale_tag}"
 
+    # Prepare result and log directories so per-subject logs can be appended during the loop
+    confusion_dir = Path(f"results/classification/{strategy.get_name()}/{feature_tag}/{scale_tag}/plots")
+    result_dir = Path(f"results/classification/{strategy.get_name()}/{feature_tag}/{scale_tag}/joblib")
+    log_dir = Path(f"results/classification/{strategy.get_name()}/{feature_tag}/{scale_tag}/logs")
+    confusion_dir.mkdir(parents=True, exist_ok=True)
+    result_dir.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    score_log_path = log_dir / f"{run_tag}_scores.csv"
+    timing_log_path = log_dir / f"{run_tag}_timing.log"
+    summary_path = log_dir / f"{run_tag}_summary.txt"
+
+    # Create files with headers if they don't exist so we can append per-subject entries safely
+    if not score_log_path.exists():
+        with open(score_log_path, "w") as f:
+            f.write("subject,score,chance_baseline,majority_baseline,delta_over_chance,delta_over_majority\n")
+    if not timing_log_path.exists():
+        with open(timing_log_path, "w") as f:
+            f.write("subject,train_time_sec,predict_time_sec\n")
+    if not summary_path.exists():
+        with open(summary_path, "w") as f:
+            f.write(f"Per-Subject Summary Log for {run_tag}\n\n")
+
     for file in tqdm(train_files, desc="Training models on subjects"):
         print(f"Classifying on file: {file.name}")
         match = re.search(r"preprocessed_sub-(\d{2}).joblib", file.name)
@@ -140,7 +165,9 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
         # Train model
         model = strategy.create_model()
         print(f"Training model: {strategy.get_name()}")
+        train_start = time.perf_counter()
         model.fit(X_train, y_train_fit)
+        train_time = time.perf_counter() - train_start
 
         # Load and transform validation data
         val_candidates = list(val_dir.glob(f"*{file.name}"))
@@ -158,7 +185,9 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
         print(f"Validation shape after feature extraction: \n x_val: {x_val.shape} \n y_val: {y_val.shape}")
 
         # Evaluate
+        predict_start = time.perf_counter()
         raw_predictions = model.predict(x_val)
+        predict_time = time.perf_counter() - predict_start
         decode_targets = getattr(strategy, "decode_targets", None)
         if callable(decode_targets):
             y_pred = decode_targets(raw_predictions)
@@ -178,6 +207,8 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
             "majority_baseline": majority_baseline,
             "delta_over_chance": delta_over_chance,
             "delta_over_majority": delta_over_majority,
+            "train_time": train_time,
+            "predict_time": predict_time,
         })
 
         # Confusion matrix
@@ -207,8 +238,6 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
         fig.savefig(confusion_dir / f"{run_tag}_{file.stem}_confusion_matrix.png")
 
         # write result to joblib
-        result_dir = Path(f"results/classification/{strategy.get_name()}/{feature_tag}/{scale_tag}/joblib")
-        result_dir.mkdir(parents=True, exist_ok=True)
         result_path = result_dir / f"{run_tag}_{file.stem}.joblib"
         joblib.dump({
             "y_true": y_val,
@@ -225,8 +254,35 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
                 "scale": strategy_scale,
             },
             "subject_id": sub_id,
+            "train_time": float(train_time),
+            "predict_time": float(predict_time),
         }, result_path)
         print(f"Saved joblib results to {result_path.resolve()}")
+
+        # Append per-subject entries to rolling logs so partial results are available immediately
+        try:
+            with open(score_log_path, "a") as f:
+                f.write(
+                    f"{file.stem},{score:.4f},{chance_baseline:.4f},{majority_baseline:.4f},"
+                    f"{delta_over_chance:.4f},{delta_over_majority:.4f}\n"
+                )
+        except Exception:
+            print(f"Warning: failed to append to score log: {score_log_path}")
+
+        try:
+            with open(timing_log_path, "a") as f:
+                f.write(f"{file.stem},{train_time:.2f},{predict_time:.2f}\n")
+        except Exception:
+            print(f"Warning: failed to append to timing log: {timing_log_path}")
+
+        try:
+            with open(summary_path, "a") as f:
+                f.write(
+                    f"Subject: {file.stem} | score: {score:.4f} | "
+                    f"train_time: {train_time:.2f}s | predict_time: {predict_time:.2f}s\n"
+                )
+        except Exception:
+            print(f"Warning: failed to append to summary log: {summary_path}")
     
     # save all images into a single grid in a pdf
     tags = ["preprocessed", "raw"]
@@ -305,6 +361,25 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
                 f"{entry['delta_over_majority']:.4f}\n"
             )
     print(f"Saved scores to {score_log_path.resolve()}")
+
+    # save timing log file
+    timing_log_path = score_log_dir / f"{run_tag}_timing.log"
+    mean_train_time = float(np.mean([entry["train_time"] for entry in score_logger]))
+    mean_predict_time = float(np.mean([entry["predict_time"] for entry in score_logger]))
+    with open(timing_log_path, "w") as f:
+        f.write("Per-Subject Timing Log\n")
+        f.write(f"Model: {strategy.get_name()} | Feature Type: {feature_tag} | Scale: {scale_tag}\n")
+        f.write("\n")
+        f.write("subject,train_time_sec,predict_time_sec\n")
+        for entry in score_logger:
+            f.write(
+                f"{entry['subject']},{entry['train_time']:.2f},{entry['predict_time']:.2f}\n"
+            )
+        f.write("\n")
+        f.write("=== Timing Summary ===\n")
+        f.write(f"Mean training time: {mean_train_time:.2f} seconds\n")
+        f.write(f"Mean prediction time: {mean_predict_time:.2f} seconds\n")
+    print(f"Saved timing log to {timing_log_path.resolve()}")
 
 def main( 
     model: str = typer.Option(
