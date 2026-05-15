@@ -11,15 +11,17 @@ from features import (
     downsample_time,
     transform_to_band_phase,
     transform_to_band_power_with_phase,
+    transform_to_band_power_mean_sd,
+    transform_to_band_power_mean_sd_window,
     transform_to_time_frequency,
     pca_feature_selection,
     mutual_info_feature_selection,
     transform_to_dwt_hierarchical,
-    select_channels_by_mutual_info,
+    select_channels_by_mutual_info
 )
 
 # ============================================================================
-# Model Strategies - Each model defines its own transformation and fitting
+# = Model Strategies - Each model defines its own transformation and fitting =
 # ============================================================================
 
 class ModelStrategy(ABC):
@@ -103,15 +105,14 @@ class ModelStrategy(ABC):
 class RandomForestStrategy(ModelStrategy):
     def __init__(
         self,
-        n_estimators: int = 300,
-        max_features: Optional[str] = None,
-        random_state: int = 2001,
+        config: Optional[dict] = None,
         scale: bool = True,
-        feature_type: str = "stack"
+        feature_type: str = "stack",
     ):
-        self.n_estimators = n_estimators
-        self.max_features = max_features
-        self.random_state = random_state
+        self.config = config or {}
+        self.n_estimators = self.config.get("n_estimators", 300)
+        self.max_features = self.config.get("max_features", None)
+        self.random_state = self.config.get("random_state", 2001)
         self.scale = scale
         self.feature_type = feature_type
         self._x_train_raw = None
@@ -152,17 +153,16 @@ class RandomForestStrategy(ModelStrategy):
 class LogisticRegressionStrategy(ModelStrategy):
     def __init__(
         self, 
-        solver: str = "saga",
-        max_iter: int = 5000, 
+        config: Optional[dict] = None,
         scale: bool = True,
         feature_type: str = "stack",
-        l1_ratio: Optional[float] = 1
         ):
-        self.solver = solver
-        self.max_iter = max_iter
+        self.config = config or {}
+        self.solver = self.config.get("solver", "saga")
+        self.max_iter = self.config.get("max_iter", 5000)
+        self.l1_ratio = self.config.get("l1_ratio", 1)
         self.scale = scale
         self.feature_type = feature_type
-        self.l1_ratio = l1_ratio
         self._x_train_raw = None
         self._y_train = None
         self._x_val_raw = None
@@ -198,9 +198,15 @@ class LogisticRegressionStrategy(ModelStrategy):
         return "logistic_regression"
 
 class SVMStrategy(ModelStrategy):
-    def __init__(self, kernel: str = "rbf", C: float = 1.0, scale: bool = True, feature_type: str = "downsample"):
-        self.kernel = kernel
-        self.C = C
+    def __init__(
+        self,
+        config: Optional[dict] = None,
+        scale: bool = True,
+        feature_type: str = "downsample",
+    ):
+        self.config = config or {}
+        self.kernel = self.config.get("kernel", "rbf")
+        self.C = self.config.get("C", 1.0)
         self.scale = scale
         self.feature_type = feature_type
         self._x_train_raw = None
@@ -241,17 +247,15 @@ class EEGNetStrategy(ModelStrategy):
 
     def __init__(
         self,
-        epochs: int = 5,
-        batch_size: int = 32,
-        learning_rate: float = 1e-3,
-        seed: int = 734,
+        config: Optional[dict] = None,
         scale: bool = False,
         feature_type: str = "raw",
     ):
-        self.epochs = epochs
-        self.batch_size = batch_size
-        self.learning_rate = learning_rate
-        self.seed = seed
+        self.config = config or {}
+        self.epochs = self.config.get("epochs", 5)
+        self.batch_size = self.config.get("batch_size", 32)
+        self.learning_rate = self.config.get("learning_rate", 1e-3)
+        self.seed = self.config.get("seed", 734)
         self.scale = scale
         self.feature_type = feature_type
         self.input_shape = None
@@ -360,6 +364,14 @@ def create_features(
         return transform_to_band_power(
             x, sfreq=256, bands=bands,
             mean=True, stack_channels=True
+        )
+    elif feature_type == "bandpower_mean_sd":
+        return transform_to_band_power_mean_sd(
+            x, sfreq=256, bands=bands, stack_channels=True
+        )
+    elif feature_type == "bandpower_mean_sd_window":
+        return transform_to_band_power_mean_sd_window(
+            x, sfreq=256, bands=bands, n_windows=6, stack_channels=True
         )
     elif feature_type == "bandphase":
         return transform_to_band_phase(x, sfreq=256)

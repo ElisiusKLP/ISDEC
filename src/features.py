@@ -44,7 +44,10 @@ def transform_to_band_power(
     if bands is None:
         raise ValueError("bands dictionary must be provided")
 
-    n_epochs, n_channels, _ = x.shape
+    n_epochs, n_channels, n_timepoints = x.shape
+
+    # choose n_fft safely so it does not exceed the signal length (Welch requirement)
+    n_fft_param = min(256, n_timepoints)
 
     # Compute PSD using MNE (Welch)
     psd, freqs = mne.time_frequency.psd_array_welch(
@@ -52,7 +55,7 @@ def transform_to_band_power(
         sfreq=sfreq,
         fmin=min(b[0] for b in bands.values()),
         fmax=max(b[1] for b in bands.values()),
-        n_fft=256,
+        n_fft=n_fft_param,
         verbose=False,
     )
     # psd shape: (epochs, channels, freqs)
@@ -79,6 +82,121 @@ def transform_to_band_power(
         return full_spectrum.reshape(n_epochs, n_channels * full_spectrum.shape[-1])
     else:
         return full_spectrum  # shape (epochs, channels, total_band_freq_bins)
+
+
+def transform_to_band_power_mean_sd(
+    x: np.ndarray,
+    sfreq: float,
+    bands: dict[str, tuple[float, float]],
+    stack_channels: bool = True,
+) -> np.ndarray:
+    """
+    Compute per-band mean and standard deviation of the PSD for each channel.
+
+    Returns concatenated mean and std per band (mean then std) so the final
+    feature order per channel is [band1_mean, band2_mean, ..., band1_std, band2_std, ...].
+    """
+    if x.ndim != 3:
+        raise ValueError(f"Expected x with shape (epochs, channels, timepoints), got {x.shape}")
+
+    if bands is None:
+        raise ValueError("bands dictionary must be provided")
+
+    n_epochs, n_channels, n_timepoints = x.shape
+
+    # choose n_fft safely so it does not exceed the signal length
+    n_fft_param = min(256, n_timepoints)
+
+    # compute PSD across the full epoch
+    psd, freqs = mne.time_frequency.psd_array_welch(
+        x,
+        sfreq=sfreq,
+        fmin=min(b[0] for b in bands.values()),
+        fmax=max(b[1] for b in bands.values()),
+        n_fft=n_fft_param,
+        verbose=False,
+    )
+
+    n_bands = len(bands)
+    mean_block = np.zeros((n_epochs, n_channels, n_bands))
+    std_block = np.zeros((n_epochs, n_channels, n_bands))
+
+    for i, (_, (fmin, fmax)) in enumerate(bands.items()):
+        freq_mask = (freqs >= fmin) & (freqs <= fmax)
+        vals = psd[:, :, freq_mask]
+        mean_block[:, :, i] = vals.mean(axis=-1)
+        std_block[:, :, i] = vals.std(axis=-1)
+
+    combined = np.concatenate([mean_block, std_block], axis=2)  # (epochs, channels, n_bands*2)
+
+    if stack_channels:
+        return combined.reshape(n_epochs, n_channels * combined.shape[2])
+    else:
+        return combined
+
+
+def transform_to_band_power_mean_sd_window(
+    x: np.ndarray,
+    sfreq: float,
+    bands: dict[str, tuple[float, float]],
+    n_windows: int = 6,
+    stack_channels: bool = True,
+) -> np.ndarray:
+    """
+    Split each epoch into `n_windows` temporal windows and compute per-window
+    band mean and std of the PSD. Concatenates windowed stats to produce
+    temporal-localised bandpower features while keeping dimensionality manageable.
+    """
+    if x.ndim != 3:
+        raise ValueError(f"Expected x with shape (epochs, channels, timepoints), got {x.shape}")
+
+    if bands is None:
+        raise ValueError("bands dictionary must be provided")
+
+    n_epochs, n_channels, n_timepoints = x.shape
+
+    # create windows as index ranges
+    indices = np.array_split(np.arange(n_timepoints), n_windows)
+
+    window_blocks = []
+    for idx in indices:
+        if len(idx) == 0:
+            # in case n_windows > n_timepoints
+            continue
+        start, end = idx[0], idx[-1] + 1
+        x_win = x[:, :, start:end]
+
+        # compute PSD for window; ensure n_fft does not exceed window length
+        win_len = x_win.shape[-1]
+        n_fft_param = min(256, win_len)
+        psd, freqs = mne.time_frequency.psd_array_welch(
+            x_win,
+            sfreq=sfreq,
+            fmin=min(b[0] for b in bands.values()),
+            fmax=max(b[1] for b in bands.values()),
+            n_fft=n_fft_param,
+            verbose=False,
+        )
+
+        n_bands = len(bands)
+        mean_block = np.zeros((n_epochs, n_channels, n_bands))
+        std_block = np.zeros((n_epochs, n_channels, n_bands))
+        for i, (_, (fmin, fmax)) in enumerate(bands.items()):
+            freq_mask = (freqs >= fmin) & (freqs <= fmax)
+            vals = psd[:, :, freq_mask]
+            mean_block[:, :, i] = vals.mean(axis=-1)
+            std_block[:, :, i] = vals.std(axis=-1)
+
+        combined = np.concatenate([mean_block, std_block], axis=2)  # (epochs, channels, n_bands*2)
+        window_blocks.append(combined)
+
+    # concatenate windows along the band/stat axis
+    all_windows = np.concatenate(window_blocks, axis=2)  # (epochs, channels, n_windows*n_bands*2)
+
+    if stack_channels:
+        return all_windows.reshape(n_epochs, n_channels * all_windows.shape[2])
+    else:
+        return all_windows
 
 def transform_to_time_frequency(
     x: np.ndarray, 

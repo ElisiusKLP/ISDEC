@@ -23,6 +23,26 @@ train_dir = joblib_dir / "training_set"
 val_dir = joblib_dir / "validation_set"
 
 
+def _format_config_value(value: object) -> str:
+    if isinstance(value, dict):
+        return _format_config_tag(value)
+    if isinstance(value, list):
+        return "-".join(_format_config_value(item) for item in value)
+    text = str(value)
+    return text.replace(" ", "_").replace("/", "-")
+
+
+def _format_config_tag(config: dict | None) -> str:
+    """Build a deterministic filesystem-safe label for a model config."""
+    if not config:
+        return "default"
+
+    parts = []
+    for key in sorted(config.keys()):
+        parts.append(f"{key}={_format_config_value(config[key])}")
+    return "__".join(parts)
+
+
 # ============================================================================
 # Model Registry - Map model names to strategies
 # ============================================================================
@@ -43,6 +63,8 @@ FEATURE_TYPES = [
     "dwt_channel_select",
     "tfr_pca",
     "bandpower_mean",
+    "bandpower_mean_sd",
+    "bandpower_mean_sd_window",
     "bandpower_phase",
     "stack",
     "bandphase"
@@ -52,7 +74,7 @@ MODEL_CHOICES = tuple(MODEL_REGISTRY.keys())
 FEATURE_CHOICES = tuple(FEATURE_TYPES)
 
 
-def get_model_strategy(model_name: str, scale: bool = True, feature_type: str = "stack") -> ModelStrategy:
+def get_model_strategy(model_name: str, scale: bool = True, feature_type: str = "stack", config: dict | None = None) -> ModelStrategy:
     """Get strategy for the specified model"""
     if model_name not in MODEL_REGISTRY:
         raise ValueError(
@@ -65,11 +87,11 @@ def get_model_strategy(model_name: str, scale: bool = True, feature_type: str = 
     if model_name == "eegnet":
         # EEGNet can take on feature extraction
         if feature_type != "raw" and feature_type in FEATURE_TYPES:
-            return MODEL_REGISTRY[model_name](scale=False, feature_type=feature_type)
+            return MODEL_REGISTRY[model_name](scale=False, feature_type=feature_type, config=config)
         else:
         # if EEGNet is not given a feature extraction type, it gets "raw"
-            return MODEL_REGISTRY[model_name](scale=False, feature_type="raw")
-    return MODEL_REGISTRY[model_name](scale=scale, feature_type=feature_type)
+            return MODEL_REGISTRY[model_name](scale=False, feature_type="raw", config=config)
+    return MODEL_REGISTRY[model_name](scale=scale, feature_type=feature_type, config=config)
 
 
 # ============================================================================
@@ -106,17 +128,31 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
     score_logger = []
     strategy_scale = bool(getattr(strategy, "scale", True))
     strategy_feature_type = str(getattr(strategy, "feature_type", "stack"))
+    strategy_config = getattr(strategy, "config", None)
     scale_tag = 'scale' if strategy_scale else 'no_scale'
     feature_tag = strategy_feature_type
-    run_tag = f"{strategy.get_name()}_{feature_tag}_{scale_tag}"
+    config_tag = _format_config_tag(strategy_config)
+    run_tag = f"{strategy.get_name()}_{feature_tag}_{scale_tag}_{config_tag}"
 
     # Prepare result and log directories so per-subject logs can be appended during the loop
-    confusion_dir = Path(f"results/classification/{strategy.get_name()}/{feature_tag}/{scale_tag}/plots")
-    result_dir = Path(f"results/classification/{strategy.get_name()}/{feature_tag}/{scale_tag}/joblib")
-    log_dir = Path(f"results/classification/{strategy.get_name()}/{feature_tag}/{scale_tag}/logs")
+    # Structure: no config -> .../scale_tag/ | with config -> .../scale_tag/grid/config_tag/
+    if strategy_config and len(strategy_config) > 0:
+        base_dir = Path(f"results/classification/{strategy.get_name()}/{feature_tag}/{scale_tag}/grid/{config_tag}")
+    else:
+        base_dir = Path(f"results/classification/{strategy.get_name()}/{feature_tag}/{scale_tag}")
+    confusion_dir = base_dir / "plots"
+    result_dir = base_dir / "joblib"
+    log_dir = base_dir / "logs"
     confusion_dir.mkdir(parents=True, exist_ok=True)
     result_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check if this configuration has already been run
+    existing_results = list(result_dir.glob("*.joblib"))
+    if existing_results:
+        print(f"[yellow]WARNING[/yellow]: Results for this configuration already exist at {result_dir.resolve()}")
+        print(f"[yellow]SKIPPING[/yellow]: To rerun, delete: {base_dir.resolve()}")
+        return
 
     score_log_path = log_dir / f"{run_tag}_scores.csv"
     timing_log_path = log_dir / f"{run_tag}_timing.log"
@@ -238,8 +274,6 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
         ax = disp.plot()
         disp.ax_.set_title(f"Confusion Matrix — Trained: {file.name}")
 
-        confusion_dir = Path(f"results/classification/{strategy.get_name()}/{feature_tag}/{scale_tag}/plots")
-        confusion_dir.mkdir(parents=True, exist_ok=True)
         fig = disp.ax_.figure
         fig.savefig(confusion_dir / f"{run_tag}_{file.stem}_confusion_matrix.png")
 
@@ -258,6 +292,7 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
                 "model_name": strategy.get_name(),
                 "feature_type": strategy_feature_type,
                 "scale": strategy_scale,
+                "config": getattr(strategy, "config", None),
             },
             "subject_id": sub_id,
             "train_time": float(train_time),
@@ -347,7 +382,7 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
     summary_text = "\n".join(summary_lines)
     print(summary_text)
 
-    summary_dir = Path(f"results/classification/{strategy.get_name()}/{feature_tag}/{scale_tag}/logs")
+    summary_dir = base_dir / "logs"
     summary_dir.mkdir(parents=True, exist_ok=True)
     summary_path = summary_dir / f"{run_tag}_summary.txt"
     with open(summary_path, "w") as f:
@@ -355,7 +390,7 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
     print(f"Saved summary to {summary_path.resolve()}")
 
     # save scores to a log file
-    score_log_dir = Path(f"results/classification/{strategy.get_name()}/{feature_tag}/{scale_tag}/logs")
+    score_log_dir = base_dir / "logs"
     score_log_dir.mkdir(parents=True, exist_ok=True)
     score_log_path = score_log_dir / f"{run_tag}_scores.csv"
     with open(score_log_path, "w") as f:

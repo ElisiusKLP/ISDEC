@@ -1,0 +1,27 @@
+{
+  "1": {
+    "models": ["svm"],
+    "features": ["bandpower_mean", "tfr_morlet", "tfr_dwt_cmor", "tfr_pca"],
+    "scales": ["scale", "no_scale"]
+  },
+  "2": {
+    "models": ["random_forest"],
+    "features": ["bandpower_mean", "tfr_pca"],
+    "scales": ["scale", "no_scale"]
+  },
+  "3": {
+    "models": ["random_forest"],
+    "features": ["dwt_hierarchical", "dwt_channel_select"],
+    "scales": ["scale"]
+  },
+  "4": {
+    "models": ["random_forest", "svm"],
+    "features": ["bandpower_mean_sd", "bandpower_mean_sd_window"],
+    "scales": ["scale"]
+  },
+  "5": {
+    "models": ["random_forest"],
+    "features": ["bandpower_mean"],
+    "scales": ["scale"]
+  }
+}
