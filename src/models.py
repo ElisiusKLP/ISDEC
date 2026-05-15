@@ -14,6 +14,8 @@ from features import (
     transform_to_time_frequency,
     pca_feature_selection,
     mutual_info_feature_selection,
+    transform_to_dwt_hierarchical,
+    select_channels_by_mutual_info,
 )
 
 # ============================================================================
@@ -56,6 +58,47 @@ class ModelStrategy(ABC):
             raise ValueError(f"Unknown model type: {self.model_type}")
         return joblib_dir / "training_set", joblib_dir / "validation_set"
 
+    def set_raw_data(self, x_train: np.ndarray, y_train: np.ndarray, x_val: np.ndarray) -> None:
+        """Store train/val data for feature extractors that require labels."""
+        self._x_train_raw = x_train
+        self._y_train = y_train
+        self._x_val_raw = x_val
+        self._cached_train_features = None
+        self._cached_val_features = None
+
+    def _transform_with_feature_type(self, x: np.ndarray, *, is_train: bool) -> np.ndarray:
+        """Shared transform path for classic models."""
+        feature_type = getattr(self, "feature_type", "stack")
+
+        if feature_type != "dwt_channel_select":
+            return create_features(x, feature_type=feature_type)
+
+        cached_train = getattr(self, "_cached_train_features", None)
+        cached_val = getattr(self, "_cached_val_features", None)
+
+        if is_train and cached_train is not None:
+            return cached_train
+        if not is_train and cached_val is not None:
+            return cached_val
+
+        x_train_raw = getattr(self, "_x_train_raw", None)
+        y_train = getattr(self, "_y_train", None)
+        x_val_raw = getattr(self, "_x_val_raw", None)
+
+        assert x_train_raw is not None
+        assert y_train is not None
+        assert x_val_raw is not None
+
+        x_train_features, x_val_features = create_features(
+            x_train_raw,
+            feature_type=feature_type,
+            y_train=y_train,
+            x_reference=x_val_raw,
+        )
+        self._cached_train_features = x_train_features
+        self._cached_val_features = x_val_features
+        return x_train_features if is_train else x_val_features
+
 
 class RandomForestStrategy(ModelStrategy):
     def __init__(
@@ -71,14 +114,19 @@ class RandomForestStrategy(ModelStrategy):
         self.random_state = random_state
         self.scale = scale
         self.feature_type = feature_type
+        self._x_train_raw = None
+        self._y_train = None
+        self._x_val_raw = None
+        self._cached_train_features = None
+        self._cached_val_features = None
 
     def transform_train(self, x: np.ndarray) -> np.ndarray:
         """Reshape to (n_samples, n_features)"""
-        return create_features(x, feature_type=self.feature_type)
+        return self._transform_with_feature_type(x, is_train=True)
 
     def transform_val(self, x: np.ndarray) -> np.ndarray:
         """Reshape to (n_samples, n_features)"""
-        return create_features(x, feature_type=self.feature_type)
+        return self._transform_with_feature_type(x, is_train=False)
 
     def create_model(self) -> Pipeline:
         """Create a pipeline with optional scaling and Random Forest classifier"""
@@ -115,13 +163,19 @@ class LogisticRegressionStrategy(ModelStrategy):
         self.scale = scale
         self.feature_type = feature_type
         self.l1_ratio = l1_ratio
+        self._x_train_raw = None
+        self._y_train = None
+        self._x_val_raw = None
+        self._cached_train_features = None
+        self._cached_val_features = None
+
     def transform_train(self, x: np.ndarray) -> np.ndarray:
         """Flatten to (n_samples, n_features)"""
-        return create_features(x, feature_type=self.feature_type)
+        return self._transform_with_feature_type(x, is_train=True)
 
     def transform_val(self, x: np.ndarray) -> np.ndarray:
         """Same transformation as training"""
-        return create_features(x, feature_type=self.feature_type)
+        return self._transform_with_feature_type(x, is_train=False)
 
     def create_model(self) -> Pipeline:
         """Create a pipeline with optional scaling and Logistic Regression classifier"""
@@ -149,14 +203,19 @@ class SVMStrategy(ModelStrategy):
         self.C = C
         self.scale = scale
         self.feature_type = feature_type
+        self._x_train_raw = None
+        self._y_train = None
+        self._x_val_raw = None
+        self._cached_train_features = None
+        self._cached_val_features = None
 
     def transform_train(self, x: np.ndarray) -> np.ndarray:
         """Flatten to (n_samples, n_features)"""
-        return create_features(x, feature_type=self.feature_type)
+        return self._transform_with_feature_type(x, is_train=True)
 
     def transform_val(self, x: np.ndarray) -> np.ndarray:
         """Same transformation as training"""
-        return create_features(x, feature_type=self.feature_type)
+        return self._transform_with_feature_type(x, is_train=False)
 
     def create_model(self) -> Pipeline:
         """Create a pipeline with optional scaling and SVM classifier"""
@@ -256,7 +315,12 @@ class EEGNetStrategy(ModelStrategy):
 # == Create Features function
 # =======
 
-def create_features(x: np.ndarray, feature_type: str):
+def create_features(
+    x: np.ndarray,
+    feature_type: str,
+    y_train: np.ndarray | None = None,
+    x_reference: np.ndarray | None = None,
+):
     """Create features from raw EEG data based on the specified feature type."""
     bands = {
             "delta": (1.0, 4.0),
@@ -278,6 +342,14 @@ def create_features(x: np.ndarray, feature_type: str):
         return tfr
     elif feature_type == "tfr_dwt_cmor":
         return transform_to_time_frequency(x, sfreq=256, algorithm="dwt")
+    elif feature_type == "dwt_hierarchical":
+        return transform_to_dwt_hierarchical(x, sfreq=256)
+    elif feature_type == "dwt_channel_select":
+        if y_train is None:
+            raise ValueError("y_train must be provided for dwt_channel_select")
+        if x_reference is None:
+            raise ValueError("x_reference must be provided for dwt_channel_select")
+        return select_channels_by_mutual_info(x, y_train, x_reference, k_channels=4)
     elif feature_type == "tfr_pca":
         tfr = transform_to_time_frequency(x, sfreq=256, algorithm="morlet")
         tfr_pca = pca_feature_selection(tfr, n_components=20)

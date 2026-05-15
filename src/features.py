@@ -202,6 +202,172 @@ def pca_feature_selection(X: np.ndarray, n_components: int) -> np.ndarray:
     pca = PCA(n_components=n_components)
     return pca.fit_transform(X)
 
+def transform_to_dwt_hierarchical(
+    x: np.ndarray,
+    sfreq: float,
+) -> np.ndarray:
+    """
+    Transform EEG data into DWT hierarchical features.
+    
+    Instead of concatenating all raw DWT coefficients, this aggregates coefficients
+    by decomposition level, computing statistics (mean, std, max, 75th percentile)
+    for each level. This preserves multi-scale time-frequency structure while
+    reducing dimensionality.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Shape (epochs, channels, timepoints)
+    sfreq : float
+        Sampling frequency in Hz (not used but kept for API consistency)
+
+    Returns
+    -------
+    features : np.ndarray
+        Shape (epochs, channels * n_levels * 4) where 4 statistics per level
+    """
+    if x.ndim != 3:
+        raise ValueError(f"Expected x with shape (epochs, channels, timepoints), got {x.shape}")
+
+    wavelet_name = "db4"
+    n_epochs, n_channels, n_timepoints = x.shape
+    
+    epoch_features = []
+    for epoch in range(n_epochs):
+        channel_features = []
+        for channel in range(n_channels):
+            max_level = pywt.dwt_max_level(n_timepoints, 8)
+            if max_level < 1:
+                raise ValueError(
+                    "Time series is too short for a discrete wavelet transform with the chosen wavelet"
+                )
+            
+            coeffs = pywt.wavedec(
+                x[epoch, channel],
+                wavelet=wavelet_name,
+                level=max_level,
+                mode="symmetric",
+            )
+            
+            # Compute statistics per decomposition level
+            level_stats = []
+            for level_coeff in coeffs:
+                level_coeff = np.asarray(level_coeff)
+                level_stats.extend([
+                    np.mean(level_coeff),
+                    np.std(level_coeff),
+                    np.max(np.abs(level_coeff)),
+                    np.percentile(np.abs(level_coeff), 75),
+                ])
+            
+            channel_features.append(level_stats)
+        
+        epoch_features.append(np.concatenate(channel_features))
+    
+    return np.array(epoch_features)
+
+def select_channels_by_mutual_info(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    x_test: np.ndarray,
+    k_channels: int = 4,
+    algorithm: str = "dwt",
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Select top k channels based on mutual information with target, then extract DWT features.
+    
+    This method identifies which channels are most discriminative for the classification task,
+    reducing noise from uninformative channels before feature extraction.
+
+    Parameters
+    ----------
+    x_train : np.ndarray
+        Training data, shape (epochs, channels, timepoints)
+    y_train : np.ndarray
+        Training labels, shape (epochs,)
+    x_test : np.ndarray
+        Test data, shape (epochs, channels, timepoints)
+    k_channels : int
+        Number of channels to select (default: 4)
+    algorithm : str
+        Feature extraction algorithm ("dwt" or "dwt_hierarchical", default: "dwt")
+
+    Returns
+    -------
+    X_train_features : np.ndarray
+        Training features from selected channels
+    X_test_features : np.ndarray
+        Test features from selected channels
+    """
+    from sklearn.feature_selection import mutual_info_classif
+
+    if x_train.ndim != 3 or x_test.ndim != 3:
+        raise ValueError("Expected x with shape (epochs, channels, timepoints)")
+    
+    if x_train.shape[1] != x_test.shape[1]:
+        raise ValueError("Train and test must have the same number of channels")
+    
+    n_epochs_train, n_channels, n_timepoints = x_train.shape
+    n_epochs_test = x_test.shape[0]
+    
+    # Extract initial DWT features for all channels to compute MI
+    wavelet_name = "db4"
+    max_level = pywt.dwt_max_level(n_timepoints, 8)
+    
+    if max_level < 1:
+        raise ValueError(
+            "Time series is too short for a discrete wavelet transform with the chosen wavelet"
+        )
+    
+    train_features_all = []
+    for epoch in range(n_epochs_train):
+        channel_coeffs = []
+        for channel in range(n_channels):
+            coeffs = pywt.wavedec(
+                x_train[epoch, channel],
+                wavelet=wavelet_name,
+                level=max_level,
+                mode="symmetric",
+            )
+            channel_coeffs.append(np.concatenate([np.asarray(c) for c in coeffs]))
+        train_features_all.append(np.concatenate(channel_coeffs))
+    
+    train_features_all = np.array(train_features_all)
+    
+    # Compute mutual information for each channel
+    mi_scores = mutual_info_classif(train_features_all, y_train, random_state=42)
+    coeffs_per_channel = train_features_all.shape[1] // n_channels
+    channel_mi = np.zeros(n_channels)
+    
+    for ch in range(n_channels):
+        channel_mi[ch] = mi_scores[ch * coeffs_per_channel:(ch + 1) * coeffs_per_channel].mean()
+    
+    # Select top k channels
+    selected_channels = np.argsort(channel_mi)[-k_channels:]
+    selected_channels = np.sort(selected_channels)  # Sort for consistent ordering
+    
+    # Extract features using only selected channels
+    def extract_selected_channels(X):
+        n_epochs = X.shape[0]
+        features = []
+        for epoch in range(n_epochs):
+            channel_coeffs = []
+            for channel in selected_channels:
+                coeffs = pywt.wavedec(
+                    X[epoch, channel],
+                    wavelet=wavelet_name,
+                    level=max_level,
+                    mode="symmetric",
+                )
+                channel_coeffs.append(np.concatenate([np.asarray(c) for c in coeffs]))
+            features.append(np.concatenate(channel_coeffs))
+        return np.array(features)
+    
+    x_train_features = extract_selected_channels(x_train)
+    x_test_features = extract_selected_channels(x_test)
+    
+    return x_train_features, x_test_features
+
 def downsample_time(
     x: np.ndarray,
     original_sfreq: float,

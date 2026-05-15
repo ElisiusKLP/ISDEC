@@ -549,6 +549,170 @@ def plot_dwt_time_frequency_features(
     return fig
 
 
+def plot_dwt_hierarchical_features(
+    X_raw: np.ndarray,
+    X_dwt_hier: np.ndarray,
+    subject_name: str,
+):
+    """
+    Visualize DWT hierarchical features.
+    
+    Parameters
+    ----------
+    X_raw : np.ndarray
+        Shape (epochs, channels, timepoints) - original data
+    X_dwt_hier : np.ndarray
+        Shape (epochs, channels * (max_level+1) * 4) - hierarchical DWT features
+    subject_name : str
+        Name of the subject
+    """
+    n_epochs, n_channels, n_timepoints = X_raw.shape
+    
+    fig = plt.figure(figsize=(14, 8))
+    gs = gridspec.GridSpec(2, 2, figure=fig)
+    
+    # Plot 1: Raw signal
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax1.plot(X_raw[0, 0, :], color='steelblue', alpha=0.7)
+    ax1.set_xlabel("Time Index")
+    ax1.set_ylabel("Amplitude (μV)")
+    ax1.set_title("Raw Signal (Epoch 0, Channel 0)")
+    ax1.grid(alpha=0.3)
+    
+    # Plot 2: Distribution of hierarchical features
+    ax2 = fig.add_subplot(gs[0, 1])
+    ax2.hist(X_dwt_hier.flatten(), bins=50, alpha=0.75, edgecolor='black', color='seagreen')
+    ax2.set_xlabel("Feature Value")
+    ax2.set_ylabel("Frequency")
+    ax2.set_title("Distribution of DWT Hierarchical Features")
+    ax2.grid(alpha=0.3)
+    
+    # Plot 3: Feature statistics
+    ax3 = fig.add_subplot(gs[1, 0])
+    import pywt
+    max_level = pywt.dwt_max_level(n_timepoints, 8)
+    features_per_channel = (max_level + 1) * 4
+    
+    stats = [
+        ('Mean', X_dwt_hier.mean()),
+        ('Std', X_dwt_hier.std()),
+        ('Min', X_dwt_hier.min()),
+        ('Max', X_dwt_hier.max()),
+    ]
+    labels, values = zip(*stats)
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
+    ax3.bar(labels, values, color=colors, alpha=0.7, edgecolor='black')
+    ax3.set_ylabel("Value")
+    ax3.set_title("Feature Statistics")
+    ax3.grid(alpha=0.3, axis='y')
+    
+    # Plot 4: Summary info
+    ax4 = fig.add_subplot(gs[1, 1])
+    info = [
+        f"Epochs: {n_epochs}",
+        f"Channels: {n_channels}",
+        f"Original timepoints: {n_timepoints}",
+        f"DWT max level: {max_level}",
+        f"Stats per level: 4 (mean, std, max(abs), p75(abs))",
+        f"Features per channel: {features_per_channel}",
+        f"Total features: {X_dwt_hier.shape[1]}",
+    ]
+    ax4.text(0.05, 0.5, '\n'.join(info), fontsize=10, verticalalignment='center',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5), family='monospace')
+    ax4.axis('off')
+    ax4.set_title("DWT Hierarchical Summary")
+    
+    fig.suptitle(f"DWT Hierarchical Features — {subject_name}", fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    return fig
+
+
+def plot_channel_selection_by_mutual_info_features(
+    X_train: np.ndarray,
+    X_train_selected: np.ndarray,
+    X_test: np.ndarray,
+    X_test_selected: np.ndarray,
+    selected_channels: np.ndarray,
+    subject_name: str,
+):
+    """
+    Visualize channel selection by mutual information.
+    
+    Parameters
+    ----------
+    X_train : np.ndarray
+        Shape (epochs, channels, timepoints) - original training data
+    X_train_selected : np.ndarray
+        Shape (epochs, k_channels * n_levels) - selected channel features from training
+    X_test : np.ndarray
+        Shape (epochs, channels, timepoints) - original test data
+    X_test_selected : np.ndarray
+        Shape (epochs, k_channels * n_levels) - selected channel features from test
+    selected_channels : np.ndarray
+        Indices of selected channels
+    subject_name : str
+        Name of the subject
+    """
+    n_channels = X_train.shape[1]
+    k_channels = len(selected_channels)
+    
+    fig = plt.figure(figsize=(14, 8))
+    gs = gridspec.GridSpec(2, 2, figure=fig)
+    
+    # Plot 1: Channel selection visualization
+    ax1 = fig.add_subplot(gs[0, 0])
+    channel_labels = [f"Ch {i}" for i in range(n_channels)]
+    colors = ['green' if i in selected_channels else 'lightgray' for i in range(n_channels)]
+    ax1.bar(range(n_channels), [1]*n_channels, color=colors, edgecolor='black')
+    ax1.set_xlabel("Channel")
+    ax1.set_ylabel("Selected")
+    ax1.set_xticks(range(n_channels))
+    ax1.set_xticklabels(channel_labels, rotation=45)
+    ax1.set_title("Channel Selection by Mutual Information")
+    ax1.set_ylim([0, 1.2])
+    ax1.grid(alpha=0.3, axis='y')
+    
+    # Plot 2: Feature distributions
+    ax2 = fig.add_subplot(gs[0, 1])
+    ax2.hist(X_train_selected.flatten(), bins=50, alpha=0.6, label='Training', edgecolor='black', color='steelblue')
+    ax2.hist(X_test_selected.flatten(), bins=50, alpha=0.6, label='Test', edgecolor='black', color='coral')
+    ax2.set_xlabel("Feature Value")
+    ax2.set_ylabel("Frequency")
+    ax2.set_title("Distribution of Selected Channel Features")
+    ax2.legend()
+    ax2.grid(alpha=0.3)
+    
+    # Plot 3: Mean signal per selected channel
+    ax3 = fig.add_subplot(gs[1, 0])
+    train_means = X_train[:, selected_channels, :].mean(axis=2)  # (epochs, k_channels)
+    mean_by_channel = train_means.mean(axis=0)  # (k_channels,)
+    ax3.bar(range(k_channels), mean_by_channel, color='steelblue', alpha=0.7, edgecolor='black')
+    ax3.set_xlabel("Selected Channel Index")
+    ax3.set_ylabel("Mean Amplitude (μV)")
+    ax3.set_title("Mean Signal per Selected Channel")
+    ax3.grid(alpha=0.3, axis='y')
+    
+    # Plot 4: Summary info
+    ax4 = fig.add_subplot(gs[1, 1])
+    info = [
+        f"Total channels: {n_channels}",
+        f"Selected channels: {k_channels}",
+        f"Selected channel indices: {selected_channels.tolist()}",
+        f"Train features shape: {X_train_selected.shape}",
+        f"Test features shape: {X_test_selected.shape}",
+        f"Train feature mean: {X_train_selected.mean():.4f}",
+        f"Test feature mean: {X_test_selected.mean():.4f}",
+    ]
+    ax4.text(0.05, 0.5, '\n'.join(info), fontsize=10, verticalalignment='center',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5), family='monospace')
+    ax4.axis('off')
+    ax4.set_title("Channel Selection Summary")
+    
+    fig.suptitle(f"Channel Selection by Mutual Information — {subject_name}", fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    return fig
+
+
 # ============================================================================
 # Main Testing Function
 # ============================================================================
@@ -728,11 +892,267 @@ def test_feature_extraction(n_subjects: int = 5, sfreq: float = 200.0):
 
         except Exception as e:
             print(f"✗ Error: {e}")
+
+        try:
+            # ================================================================
+            # Test 8: DWT Hierarchical Extraction
+            # ================================================================
+            print(f"  Testing DWT hierarchical extraction...", end=" ")
+            X_dwt_hier = create_model_features(X, feature_type="dwt_hierarchical")
+            if X_dwt_hier is None:
+                raise ValueError("DWT hierarchical transform returned None")
+            print(f"✓ shape: {X_dwt_hier.shape}")
+
+            fig = plot_dwt_hierarchical_features(X, X_dwt_hier, subject_name)
+            fig_path = subject_dir / f"{subject_name}_dwt_hierarchical.png"
+            fig.savefig(fig_path, dpi=100, bbox_inches='tight')
+            plt.close(fig)
+            print(f"    Saved: {fig_path.name}")
+
+        except Exception as e:
+            print(f"✗ Error: {e}")
+
+        try:
+            # ================================================================
+            # Test 9: Channel Selection by Mutual Information
+            # ================================================================
+            print(f"  Testing channel selection by mutual information...", end=" ")
+            from features import select_channels_by_mutual_info
+            
+            # For testing purposes, split data into train/test and create synthetic labels
+            n_split = max(1, n_epochs // 2)
+            X_train_split = X[:n_split]
+            X_test_split = X[n_split:]
+            
+            # Create synthetic labels (simple binary classification)
+            y_train_split = np.random.randint(0, 2, n_split)
+            
+            # Perform channel selection
+            X_train_selected, X_test_selected = select_channels_by_mutual_info(
+                X_train_split, y_train_split, X_test_split, k_channels=4
+            )
+            
+            if X_train_selected is None or X_test_selected is None:
+                raise ValueError("Channel selection returned None")
+            print(f"✓ train shape: {X_train_selected.shape}, test shape: {X_test_selected.shape}")
+            
+            # Infer selected channels (those with highest MI)
+            from sklearn.feature_selection import mutual_info_classif
+            import pywt
+            
+            # Flatten training data for MI calculation
+            X_train_flat = X_train_split.reshape(n_split, -1)
+            mi_scores = mutual_info_classif(X_train_flat, y_train_split, random_state=42)
+            
+            # Group MI scores by channel (average across timepoints)
+            n_timepoints_split = X_train_split.shape[2]
+            mi_per_channel = []
+            for ch in range(n_channels):
+                ch_start = ch * n_timepoints_split
+                ch_end = (ch + 1) * n_timepoints_split
+                mi_per_channel.append(mi_scores[ch_start:ch_end].mean())
+            
+            selected_channels = np.argsort(mi_per_channel)[-4:]  # Top 4 channels
+            
+            fig = plot_channel_selection_by_mutual_info_features(
+                X_train_split, X_train_selected, X_test_split, X_test_selected,
+                selected_channels, subject_name
+            )
+            fig_path = subject_dir / f"{subject_name}_channel_selection_mi.png"
+            fig.savefig(fig_path, dpi=100, bbox_inches='tight')
+            plt.close(fig)
+            print(f"    Saved: {fig_path.name}")
+
+        except Exception as e:
+            print(f"✗ Error: {e}")
     
     print(f"\n[bold green]✓ Testing complete! Plots saved to:{test_output_dir}[/bold green]")
 
 
+def test_dwt_hierarchical():
+    """
+    Test transform_to_dwt_hierarchical feature extraction.
+    
+    This test verifies:
+    - Correct output shape (epochs, channels * n_levels * 4)
+    - No NaN or inf values in output
+    - Proper handling of different array shapes
+    """
+    from features import transform_to_dwt_hierarchical
+    
+    print("\n" + "="*80)
+    print("Testing: transform_to_dwt_hierarchical")
+    print("="*80)
+    
+    # Test 1: Basic shape validation
+    print("\n[Test 1] Shape validation")
+    n_epochs, n_channels, n_timepoints = 10, 8, 512
+    x = np.random.randn(n_epochs, n_channels, n_timepoints)
+    
+    features = transform_to_dwt_hierarchical(x, sfreq=256)
+    
+    assert features.ndim == 2, f"Expected 2D output, got {features.ndim}D"
+    assert features.shape[0] == n_epochs, f"Expected {n_epochs} epochs, got {features.shape[0]}"
+    
+    # Calculate expected number of features per channel
+    import pywt
+    max_level = pywt.dwt_max_level(n_timepoints, 8)
+    expected_features_per_channel = (max_level + 1) * 4
+
+    expected_total_features = n_channels * expected_features_per_channel
+
+    assert features.shape[1] == expected_total_features, \
+        f"Expected {expected_total_features} features for {n_channels} channels and {n_timepoints} timepoints, got {features.shape[1]}"
+    
+    print(f"✓ Input shape: {x.shape}")
+    print(f"✓ Output shape: {features.shape}")
+    print(f"✓ Features per channel: {expected_features_per_channel} ({max_level + 1} levels × 4 stats)")
+    print(f"✓ Total expected features: {expected_total_features} for {n_channels} channels")
+    
+    # Test 2: No NaN or inf values
+    print("\n[Test 2] Data integrity")
+    assert not np.any(np.isnan(features)), "Output contains NaN values"
+    assert not np.any(np.isinf(features)), "Output contains inf values"
+    print(f"✓ No NaN or inf values")
+    print(f"✓ Min value: {features.min():.6f}, Max value: {features.max():.6f}")
+    
+    # Test 3: Different input shapes
+    print("\n[Test 3] Different input shapes")
+    test_shapes = [(5, 4, 256), (1, 16, 1024), (20, 2, 128)]
+    
+    for shape in test_shapes:
+        x_test = np.random.randn(*shape)
+        features_test = transform_to_dwt_hierarchical(x_test, sfreq=256)
+        assert features_test.shape[0] == shape[0], f"Epochs mismatch for shape {shape}"
+        assert not np.any(np.isnan(features_test)), f"NaN found for shape {shape}"
+        print(f"  ✓ Shape {shape} → features shape {features_test.shape}")
+    
+    # Test 4: Consistency
+    print("\n[Test 4] Consistency")
+    x_const = np.random.randn(5, 4, 256)
+    features1 = transform_to_dwt_hierarchical(x_const, sfreq=256)
+    features2 = transform_to_dwt_hierarchical(x_const, sfreq=256)
+    assert np.allclose(features1, features2), "Same input produced different outputs"
+    print(f"✓ Deterministic: same input produces identical output")
+    
+    print("\n✓ All tests passed for transform_to_dwt_hierarchical\n")
+
+
+def test_channel_selection_by_mutual_info():
+    """
+    Test select_channels_by_mutual_info feature extraction.
+    
+    This test verifies:
+    - Correct number of channels selected
+    - Output shape consistency (train/test match)
+    - No NaN or inf values
+    """
+    from features import select_channels_by_mutual_info
+    
+    print("\n" + "="*80)
+    print("Testing: select_channels_by_mutual_info")
+    print("="*80)
+    
+    # Test 1: Basic shape and channel selection
+    print("\n[Test 1] Channel selection and shape validation")
+    n_channels = 8
+    k_channels = 4
+    n_epochs_train, n_epochs_test = 30, 10
+    n_timepoints = 512
+    
+    # Create synthetic data
+    x_train = np.random.randn(n_epochs_train, n_channels, n_timepoints)
+    x_test = np.random.randn(n_epochs_test, n_channels, n_timepoints)
+    y_train = np.random.randint(0, 2, n_epochs_train)
+    
+    # Make first few channels more informative
+    for i in range(2):
+        x_train[:, i, :] += y_train[:, np.newaxis] * 0.5
+        x_test[:, i, :] += np.random.randint(0, 2, n_epochs_test)[:, np.newaxis] * 0.5
+    
+    X_train_feat, X_test_feat = select_channels_by_mutual_info(
+        x_train, y_train, x_test, k_channels=k_channels
+    )
+    
+    print(f"✓ Train input shape: {x_train.shape}")
+    print(f"✓ Test input shape: {x_test.shape}")
+    print(f"✓ Selected {k_channels} out of {n_channels} channels")
+    
+    # Check output shapes
+    assert X_train_feat.shape[0] == n_epochs_train, "Train epochs mismatch"
+    assert X_test_feat.shape[0] == n_epochs_test, "Test epochs mismatch"
+    assert X_train_feat.shape[1] == X_test_feat.shape[1], "Train/test feature dimension mismatch"
+    
+    print(f"✓ Train features shape: {X_train_feat.shape}")
+    print(f"✓ Test features shape: {X_test_feat.shape}")
+    
+    # Test 2: Data integrity
+    print("\n[Test 2] Data integrity")
+    assert not np.any(np.isnan(X_train_feat)), "Train features contain NaN"
+    assert not np.any(np.isinf(X_train_feat)), "Train features contain inf"
+    assert not np.any(np.isnan(X_test_feat)), "Test features contain NaN"
+    assert not np.any(np.isinf(X_test_feat)), "Test features contain inf"
+    print(f"✓ No NaN or inf in train features")
+    print(f"✓ No NaN or inf in test features")
+    
+    # Test 3: Feature count validation
+    print("\n[Test 3] Feature count validation")
+    import pywt
+    max_level = pywt.dwt_max_level(n_timepoints, 8)
+    coeffs = pywt.wavedec(
+        np.random.randn(n_timepoints),
+        wavelet="db4",
+        level=max_level,
+        mode="symmetric",
+    )
+    coeffs_per_channel = sum(c.size for c in coeffs)
+    expected_features = k_channels * coeffs_per_channel
+    
+    assert X_train_feat.shape[1] == expected_features, \
+        f"Expected {expected_features} features for {k_channels} selected channels and {n_timepoints} timepoints, got {X_train_feat.shape[1]}"
+    print(f"✓ Feature count correct: {k_channels} channels × {coeffs_per_channel} coefficients per channel")
+    
+    # Test 4: Different k_channels values
+    print("\n[Test 4] Different k_channels values")
+    for k in [2, 4, 6]:
+        X_tr, X_te = select_channels_by_mutual_info(
+            x_train, y_train, x_test, k_channels=k
+        )
+        assert X_tr.shape[0] == n_epochs_train
+        assert X_te.shape[0] == n_epochs_test
+        assert X_tr.shape[1] == X_te.shape[1]
+        print(f"  ✓ k_channels={k}: train {X_tr.shape}, test {X_te.shape}")
+    
+    # Test 5: Input validation
+    print("\n[Test 5] Input validation")
+    
+    # Mismatched channels
+    x_train_bad = np.random.randn(20, 8, 256)
+    x_test_bad = np.random.randn(10, 7, 256)
+    y_train_bad = np.random.randint(0, 2, 20)
+    
+    try:
+        select_channels_by_mutual_info(x_train_bad, y_train_bad, x_test_bad, k_channels=4)
+        assert False, "Should have raised ValueError for mismatched channels"
+    except ValueError as e:
+        print(f"✓ Correctly caught channel mismatch")
+    
+    # Wrong input dimensions
+    x_train_2d = np.random.randn(20, 256)
+    try:
+        select_channels_by_mutual_info(x_train_2d, y_train_bad, x_test, k_channels=4)
+        assert False, "Should have raised ValueError for 2D input"
+    except ValueError as e:
+        print(f"✓ Correctly caught wrong dimensionality")
+    
+    print("\n✓ All tests passed for select_channels_by_mutual_info\n")
+
+
 if __name__ == "__main__":
+    # Run new feature tests
+    #test_dwt_hierarchical()
+    #test_channel_selection_by_mutual_info()
+    
     # Test on first 5 subjects by default
     # Adjust n_subjects parameter to test on more subjects
     test_feature_extraction(n_subjects=5, sfreq=256.0)

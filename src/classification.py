@@ -39,6 +39,8 @@ FEATURE_TYPES = [
     "tfr_morlet",
     "tfr_morlet_bands",
     "tfr_dwt_cmor",
+    "dwt_hierarchical",
+    "dwt_channel_select",
     "tfr_pca",
     "bandpower_mean",
     "bandpower_phase",
@@ -146,6 +148,21 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
         X_train = data["x"]
         y_train = data["y"]
 
+        # Load validation data first (needed for channel selection feature type)
+        val_candidates = list(val_dir.glob(f"*{file.name}"))
+        if len(val_candidates) == 0:
+            raise ValueError("Did not find any validation file")
+        val_file = val_candidates[0]
+        print(f"Validating on file: {val_file.resolve()}")
+        val_data = joblib.load(val_file)
+        x_val = val_data["x"]
+        y_val = val_data["y"]
+
+        # Set raw data for strategies that need it (e.g., channel selection)
+        set_raw_data = getattr(strategy, "set_raw_data", None)
+        if callable(set_raw_data):
+            set_raw_data(X_train, y_train, x_val)
+
         # Transform training data
         print(f"Train shape before feature extraction: \n X_train: {X_train.shape} \n y_train: {y_train.shape}")
         X_train = strategy.transform_train(X_train)
@@ -168,17 +185,6 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
         train_start = time.perf_counter()
         model.fit(X_train, y_train_fit)
         train_time = time.perf_counter() - train_start
-
-        # Load and transform validation data
-        val_candidates = list(val_dir.glob(f"*{file.name}"))
-        if len(val_candidates) == 0:
-            raise ValueError("Did not find any validation file")
-        val_file = val_candidates[0]
-        print(f"Validating on file: {val_file.resolve()}")
-
-        val_data = joblib.load(val_file)
-        x_val = val_data["x"]
-        y_val = val_data["y"]
 
         # Transform validation data using strategy
         x_val = strategy.transform_val(x_val)

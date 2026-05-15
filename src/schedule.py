@@ -6,7 +6,7 @@ from rich import print
 
 from classification import FEATURE_CHOICES, MODEL_CHOICES, fit_model, get_model_strategy, train_dir, val_dir
 
-SCHEDULE = 2
+SCHEDULE = 3
 if SCHEDULE == 1:
 	RUN_MODEL_CHOICES = ["svm"]
 	RUN_FEATURE_CHOICES = ["bandpower_mean", "tfr_morlet", "tfr_dwt_cmor", "tfr_pca"]
@@ -15,6 +15,10 @@ elif SCHEDULE == 2:
 	RUN_MODEL_CHOICES = ["random_forest"]
 	RUN_FEATURE_CHOICES = ["bandpower_mean", "tfr_pca"]
 	RUN_SCALE_CHOICES = ["scale", "no_scale"]
+elif SCHEDULE == 3:
+	RUN_MODEL_CHOICES: list[str] = ["random_forest"]
+	RUN_FEATURE_CHOICES: list[str] = ["dwt_hierarchical", "dwt_channel_select"]
+	RUN_SCALE_CHOICES: list[str] = ["scale"]
 
 def main(
 	model: list[str] = typer.Option(
