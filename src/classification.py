@@ -2,6 +2,7 @@ import click
 from matplotlib.pylab import plot
 import models
 import numpy as np
+import re
 import sklearn
 import joblib
 import typer
@@ -29,11 +30,15 @@ MODEL_REGISTRY = {
     "random_forest": models.RandomForestStrategy,
     "logistic_regression": models.LogisticRegressionStrategy,
     "svm": models.SVMStrategy,
+    "eegnet": models.EEGNetStrategy,
 }
 
 FEATURE_TYPES = [
     "downsample", 
-    "bandpower", 
+    "tfr_morlet",
+    "tfr_dwt_cmor",
+    "tfr_pca",
+    "bandpower_mean",
     "bandpower_phase",
     "stack",
     "bandphase"
@@ -49,10 +54,17 @@ def get_model_strategy(model_name: str, scale: bool = True, feature_type: str = 
         raise ValueError(
             f"Unknown model: {model_name}. Available: {list(MODEL_REGISTRY.keys())}"
         )
-    if feature_type not in FEATURE_TYPES:
+    if model_name != "eegnet" and feature_type not in FEATURE_TYPES:
         raise ValueError(
             f"Unknown feature type: {feature_type}. Available: {FEATURE_TYPES}"
         )
+    if model_name == "eegnet":
+        # EEGNet can take on feature extraction
+        if feature_type != "raw" and feature_type in FEATURE_TYPES:
+            return MODEL_REGISTRY[model_name](scale=False, feature_type=feature_type)
+        else:
+        # if EEGNet is not given a feature extraction type, it gets "raw"
+            return MODEL_REGISTRY[model_name](scale=False, feature_type="raw")
     return MODEL_REGISTRY[model_name](scale=scale, feature_type=feature_type)
 
 
@@ -60,8 +72,11 @@ def get_model_strategy(model_name: str, scale: bool = True, feature_type: str = 
 # Main training function
 # ============================================================================
 
-def fit_model(strategy: ModelStrategy, train_dir: Path, val_dir: Path):
+def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: Path | None = None):
     """Train and validate model using the given strategy"""
+    if train_dir is None or val_dir is None:
+        train_dir, val_dir = strategy.get_data_dirs()
+
     train_files = sorted(train_dir.glob("*.joblib"))
     if len(train_files) == 0:
         raise ValueError("No training files collected from glob(*.joblib)")
@@ -93,6 +108,13 @@ def fit_model(strategy: ModelStrategy, train_dir: Path, val_dir: Path):
 
     for file in tqdm(train_files, desc="Training models on subjects"):
         print(f"Classifying on file: {file.name}")
+        match = re.search(r"preprocessed_sub-(\d{2}).joblib", file.name)
+        if match:
+            sub_id = match.group(1)
+            print(f"Found sub_id: {sub_id} in file: {file.name}")
+        else:
+            print(f"No match for file: {file.name}")
+        print(f"Subject ID: {sub_id}")  
 
         # Load training data
         data = joblib.load(file)
@@ -103,18 +125,29 @@ def fit_model(strategy: ModelStrategy, train_dir: Path, val_dir: Path):
         print(f"Train shape before feature extraction: \n X_train: {X_train.shape} \n y_train: {y_train.shape}")
         X_train = strategy.transform_train(X_train)
         print(f"Train shape after feature extraction: \n X_train: {X_train.shape} \n y_train: {y_train.shape}")
+
+        set_data_info = getattr(strategy, "set_data_info", None)
+        if callable(set_data_info) and getattr(strategy, "input_shape", None) is None:
+            set_data_info(X_train, class_labels)
+
+        encode_targets = getattr(strategy, "encode_targets", None)
+        if callable(encode_targets):
+            y_train_fit = encode_targets(y_train)
+        else:
+            y_train_fit = y_train
         
 
         # Train model
         model = strategy.create_model()
         print(f"Training model: {strategy.get_name()}")
-        model.fit(X_train, y_train)
+        model.fit(X_train, y_train_fit)
 
         # Load and transform validation data
-        val_file = list(val_dir.glob(f"*{file.name}"))[0]
-        print(f"Validating on file: {val_file.resolve()}")
-        if not val_file:
+        val_candidates = list(val_dir.glob(f"*{file.name}"))
+        if len(val_candidates) == 0:
             raise ValueError("Did not find any validation file")
+        val_file = val_candidates[0]
+        print(f"Validating on file: {val_file.resolve()}")
 
         val_data = joblib.load(val_file)
         x_val = val_data["x"]
@@ -125,7 +158,12 @@ def fit_model(strategy: ModelStrategy, train_dir: Path, val_dir: Path):
         print(f"Validation shape after feature extraction: \n x_val: {x_val.shape} \n y_val: {y_val.shape}")
 
         # Evaluate
-        y_pred = model.predict(x_val)
+        raw_predictions = model.predict(x_val)
+        decode_targets = getattr(strategy, "decode_targets", None)
+        if callable(decode_targets):
+            y_pred = decode_targets(raw_predictions)
+        else:
+            y_pred = raw_predictions
         score = accuracy_score(y_val, y_pred)
         class_counts = np.bincount(y_val.astype(int))
         majority_baseline = class_counts.max() / len(y_val)
@@ -167,6 +205,28 @@ def fit_model(strategy: ModelStrategy, train_dir: Path, val_dir: Path):
         confusion_dir.mkdir(parents=True, exist_ok=True)
         fig = disp.ax_.figure
         fig.savefig(confusion_dir / f"{run_tag}_{file.stem}_confusion_matrix.png")
+
+        # write result to joblib
+        result_dir = Path(f"results/classification/{strategy.get_name()}/{feature_tag}/{scale_tag}/joblib")
+        result_dir.mkdir(parents=True, exist_ok=True)
+        result_path = result_dir / f"{run_tag}_{file.stem}.joblib"
+        joblib.dump({
+            "y_true": y_val,
+            "y_pred": y_pred,
+            "score": score,
+            "chance_baseline": chance_baseline,
+            "majority_baseline": majority_baseline,
+            "delta_over_chance": delta_over_chance,
+            "delta_over_majority": delta_over_majority,
+            "confusion_matrix": confusion_matrix_val,
+            "model_info": {
+                "model_name": strategy.get_name(),
+                "feature_type": strategy_feature_type,
+                "scale": strategy_scale,
+            },
+            "subject_id": sub_id,
+        }, result_path)
+        print(f"Saved joblib results to {result_path.resolve()}")
     
     # save all images into a single grid in a pdf
     tags = ["preprocessed", "raw"]
@@ -263,8 +323,9 @@ def main(
     print(f"Feature type: {feature}")
     print(f"Scaling enabled: {scale}")
     strategy = get_model_strategy(model, scale=scale, feature_type=feature)
+    print(f"Data kind: {getattr(strategy, 'model_type', 'None')}")
 
-    fit_model(strategy, train_dir, val_dir)
+    fit_model(strategy, *strategy.get_data_dirs())
 
 
 if __name__ == "__main__":

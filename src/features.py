@@ -1,6 +1,7 @@
 import numpy as np
 import mne
-
+from typing import Literal
+import pywt
 
 def _validate_band_range(freq_range: tuple[float, float], sfreq: float) -> None:
     """Validate that a frequency range is usable for band-pass filtering."""
@@ -18,6 +19,8 @@ def transform_to_band_power(
     x: np.ndarray,
     sfreq: float,
     bands: dict[str, tuple[float, float]] | None = None,
+    mean: bool = True,
+    stack_channels: bool = True
 ) -> np.ndarray:
     """
     Transform EEG data into band power features using MNE PSD.
@@ -34,7 +37,8 @@ def transform_to_band_power(
     Returns
     -------
     X_bp : np.ndarray
-        Shape (epochs, channels * n_bands)
+        If mean=True: shape (epochs, channels * n_bands)
+        If mean=False: shape (epochs, channels * total_band_freq_bins)
     """
 
     if bands is None:
@@ -59,21 +63,96 @@ def transform_to_band_power(
     )
     # psd shape: (epochs, channels, freqs)
 
-    # Initialize output
-    n_bands = len(bands)
-    bandpower = np.zeros((n_epochs, n_channels, n_bands))
+    if mean:
+        n_bands = len(bands)
+        bandpower = np.zeros((n_epochs, n_channels, n_bands))
+        for i, (_, (fmin, fmax)) in enumerate(bands.items()):
+            freq_mask = (freqs >= fmin) & (freqs <= fmax)
+            bandpower[:, :, i] = psd[:, :, freq_mask].mean(axis=-1)
+        if stack_channels:
+            return bandpower.reshape(n_epochs, n_channels * n_bands)
+        else:
+            return bandpower  # shape (epochs, channels, bands)
 
-    # Compute band power
-    for i, (band_name, (fmin, fmax)) in enumerate(bands.items()):
+    # Keep the full band-limited PSD bins instead of averaging within each band.
+    spectrum_blocks = []
+    for _, (fmin, fmax) in bands.items():
         freq_mask = (freqs >= fmin) & (freqs <= fmax)
+        spectrum_blocks.append(psd[:, :, freq_mask])
 
-        # Average power in band
-        bandpower[:, :, i] = psd[:, :, freq_mask].mean(axis=-1)
+    full_spectrum = np.concatenate(spectrum_blocks, axis=-1)
+    if stack_channels:
+        return full_spectrum.reshape(n_epochs, n_channels * full_spectrum.shape[-1])
+    else:
+        return full_spectrum  # shape (epochs, channels, total_band_freq_bins)
 
-    # Flatten channels × bands into features
-    X_bp = bandpower.reshape(n_epochs, n_channels * n_bands)
+def transform_to_time_frequency(
+    x: np.ndarray, 
+    sfreq: float,
+    algorithm: Literal["morlet", "dwt"] = "morlet",
+    ) -> np.ndarray:
+    """Transform raw EEG data into time-frequency features using MNE Morlet wavelets."""
+    if x.ndim != 3:
+        raise ValueError(f"Expected x with shape (epochs, channels, timepoints), got {x.shape}")
 
-    return X_bp
+    n_epochs, n_channels, n_timepoints = x.shape
+
+    if algorithm == "morlet":
+            
+        freqs = np.logspace(np.log10(1), np.log10(100), num=20)  # example frequencies
+        n_cycles = freqs / 2.0  # example: more cycles for higher freqs
+
+        power = mne.time_frequency.tfr_array_morlet(
+            x,
+            sfreq=sfreq,
+            freqs=freqs,
+            n_cycles=n_cycles,
+            output="power",
+            verbose=False,
+        )
+        # power shape: (epochs, channels, freqs, timepoints)
+
+        return power.reshape(n_epochs, n_channels * power.shape[2] * power.shape[3])
+
+    elif algorithm == "dwt":
+        wavelet_name = "db4"
+        max_level = pywt.dwt_max_level(n_timepoints, 8)
+        if max_level < 1:
+            raise ValueError(
+                "Time series is too short for a discrete wavelet transform with the chosen wavelet"
+            )
+
+        epoch_feature_blocks = []
+        for epoch in range(n_epochs):
+            channel_blocks = []
+            for channel in range(n_channels):
+                coeffs = pywt.wavedec(
+                    x[epoch, channel],
+                    wavelet=wavelet_name,
+                    level=max_level,
+                    mode="symmetric",
+                )
+                channel_blocks.append(np.concatenate([np.asarray(coeff) for coeff in coeffs], axis=-1))
+            epoch_feature_blocks.append(np.concatenate(channel_blocks, axis=-1))
+
+        return np.stack(epoch_feature_blocks, axis=0)
+    else:
+        raise ValueError(f"Unsupported time-frequency algorithm: {algorithm}")
+
+def mutual_info_feature_selection(X: np.ndarray, y: np.ndarray, k: int) -> np.ndarray:
+    """Select top k features based on mutual information with the target."""
+    from sklearn.feature_selection import mutual_info_classif
+
+    mi = mutual_info_classif(X, y)
+    top_k_indices = np.argsort(mi)[-k:]
+    return X[:, top_k_indices]
+
+def pca_feature_selection(X: np.ndarray, n_components: int) -> np.ndarray:
+    """Reduce dimensionality to n_components using PCA."""
+    from sklearn.decomposition import PCA
+
+    pca = PCA(n_components=n_components)
+    return pca.fit_transform(X)
 
 def downsample_time(
     x: np.ndarray,

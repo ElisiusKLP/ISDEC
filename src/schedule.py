@@ -6,9 +6,9 @@ from rich import print
 
 from classification import FEATURE_CHOICES, MODEL_CHOICES, fit_model, get_model_strategy, train_dir, val_dir
 
-RUN_MODEL_CHOICES = ["logistic_regression", "svm"]
-RUN_FEATURE_CHOICES = ["bandpower", "bandphase", "bandpower_phase"]
-RUN_SCALE_CHOICES = ["scale"]
+RUN_MODEL_CHOICES = ["svm"]
+RUN_FEATURE_CHOICES = ["bandpower_mean", "tfr_morlet", "tfr_dwt_cmor", "tfr_pca"]
+RUN_SCALE_CHOICES = ["scale", "no_scale"]
 
 def main(
 	model: list[str] = typer.Option(

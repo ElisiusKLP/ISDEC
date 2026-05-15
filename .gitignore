@@ -11,3 +11,6 @@ __pycache__/
 **/figures/
 data/
 results/
+
+# files
+notes.md

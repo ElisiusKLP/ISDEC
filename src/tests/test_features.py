@@ -24,6 +24,7 @@ from features import (
     downsample_time,
     transform_to_phase,
     transform_to_band_power_with_phase,
+    transform_to_time_frequency,
 )
 
 # ============================================================================
@@ -39,11 +40,11 @@ test_output_dir.mkdir(parents=True, exist_ok=True)
 
 # Default band definitions
 DEFAULT_BANDS = {
-    "delta": (1, 4),
-    "theta": (4, 8),
-    "alpha": (8, 13),
-    "beta": (13, 30),
-    "gamma": (30, 45),
+    "delta": (1.0, 4.0),
+    "theta": (4.0, 8.0),
+    "alpha": (8.0, 13.0),
+    "beta": (13.0, 30.0),
+    "gamma": (30.0, 45.0),
 }
 
 # ============================================================================
@@ -367,6 +368,74 @@ def plot_downsampling_effect(X_raw: np.ndarray, X_downsampled: np.ndarray, origi
     return fig
 
 
+def plot_time_frequency_features(
+    X_raw: np.ndarray,
+    X_tf: np.ndarray,
+    sfreq: float,
+    subject_name: str,
+    n_freqs: int = 20,
+):
+    """
+    Visualize Morlet time-frequency features.
+
+    Parameters
+    ----------
+    X_raw : np.ndarray
+        Shape (epochs, channels, timepoints) - original data
+    X_tf : np.ndarray
+        Shape (epochs, channels * n_freqs * timepoints) - flattened time-frequency features
+    sfreq : float
+        Sampling frequency
+    subject_name : str
+        Name of the subject
+    n_freqs : int
+        Number of frequency bins used by the transform
+    """
+    n_epochs, n_channels, n_timepoints = X_raw.shape
+    tf_reshaped = X_tf.reshape(n_epochs, n_channels, n_freqs, n_timepoints)
+
+    fig = plt.figure(figsize=(14, 8))
+    gs = gridspec.GridSpec(2, 2, figure=fig)
+
+    # Plot 1: Raw signal and time-frequency map for the first epoch/channel
+    ax1 = fig.add_subplot(gs[0, 0])
+    time = np.arange(n_timepoints) / sfreq
+    ax1.plot(time, X_raw[0, 0, :], color='steelblue', alpha=0.7)
+    ax1.set_xlabel("Time (s)")
+    ax1.set_ylabel("Amplitude")
+    ax1.set_title("Raw Signal (Epoch 0, Channel 0)")
+    ax1.grid(alpha=0.3)
+
+    # Plot 2: Time-frequency power for first epoch/channel
+    ax2 = fig.add_subplot(gs[0, 1])
+    im = ax2.imshow(tf_reshaped[0, 0], aspect='auto', origin='lower', cmap='viridis')
+    ax2.set_xlabel("Time Index")
+    ax2.set_ylabel("Frequency Bin")
+    ax2.set_title("Morlet Time-Frequency Power (Epoch 0, Channel 0)")
+    plt.colorbar(im, ax=ax2, label='Power')
+
+    # Plot 3: Mean power per frequency bin across all epochs/channels
+    ax3 = fig.add_subplot(gs[1, 0])
+    mean_power_per_freq = tf_reshaped.mean(axis=(0, 1, 3))
+    ax3.plot(range(n_freqs), mean_power_per_freq, marker='o', color='coral')
+    ax3.set_xlabel("Frequency Bin")
+    ax3.set_ylabel("Mean Power")
+    ax3.set_title("Mean Power per Frequency Bin")
+    ax3.grid(alpha=0.3)
+
+    # Plot 4: Distribution of all time-frequency values
+    ax4 = fig.add_subplot(gs[1, 1])
+    ax4.hist(X_tf.flatten(), bins=50, alpha=0.75, edgecolor='black')
+    ax4.set_xlabel("Feature Value")
+    ax4.set_ylabel("Frequency")
+    ax4.set_title("Distribution of Time-Frequency Features")
+    ax4.grid(alpha=0.3)
+
+    fig.suptitle(f"Morlet Time-Frequency Extraction — {subject_name}", fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    return fig
+
+
 # ============================================================================
 # Main Testing Function
 # ============================================================================
@@ -471,8 +540,6 @@ def test_feature_extraction(n_subjects: int = 5, sfreq: float = 200.0):
                 X,
                 sfreq=sfreq,
                 bands=DEFAULT_BANDS,
-                phase_freq_range=(1.0, 40.0),
-                phase_target_sfreq=10.0,
             )
             print(f"✓ shape: {X_combined.shape}")
             
@@ -482,6 +549,25 @@ def test_feature_extraction(n_subjects: int = 5, sfreq: float = 200.0):
             plt.close(fig)
             print(f"    Saved: {fig_path.name}")
             
+        except Exception as e:
+            print(f"✗ Error: {e}")
+
+        try:
+            # ================================================================
+            # Test 5: Time-Frequency Extraction
+            # ================================================================
+            print(f"  Testing time-frequency extraction...", end=" ")
+            X_tf = transform_to_time_frequency(X, sfreq=sfreq, algorithm="morlet")
+            if X_tf is None:
+                raise ValueError("Time-frequency transform returned None")
+            print(f"✓ shape: {X_tf.shape}")
+
+            fig = plot_time_frequency_features(X, X_tf, sfreq, subject_name, n_freqs=20)
+            fig_path = subject_dir / f"{subject_name}_time_frequency.png"
+            fig.savefig(fig_path, dpi=100, bbox_inches='tight')
+            plt.close(fig)
+            print(f"    Saved: {fig_path.name}")
+
         except Exception as e:
             print(f"✗ Error: {e}")
     
