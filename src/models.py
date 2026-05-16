@@ -12,12 +12,12 @@ from features import (
     transform_to_band_phase,
     transform_to_band_power_with_phase,
     transform_to_band_power_mean_sd,
-    transform_to_band_power_mean_sd_window,
+    transform_to_band_power_stats_window,
     transform_to_time_frequency,
     pca_feature_selection,
     mutual_info_feature_selection,
     transform_to_dwt_hierarchical,
-    select_channels_by_mutual_info
+    wavelet_channels_by_mutual_info,
 )
 
 # ============================================================================
@@ -197,7 +197,7 @@ class LogisticRegressionStrategy(ModelStrategy):
     def get_name(self) -> str:
         return "logistic_regression"
 
-class SVMStrategy(ModelStrategy):
+class SVCStrategy(ModelStrategy):
     def __init__(
         self,
         config: Optional[dict] = None,
@@ -209,6 +209,7 @@ class SVMStrategy(ModelStrategy):
         self.C = self.config.get("C", 1.0)
         self.scale = scale
         self.feature_type = feature_type
+        self.random_state = self.config.get("random_state", 2072)
         self._x_train_raw = None
         self._y_train = None
         self._x_val_raw = None
@@ -233,13 +234,60 @@ class SVMStrategy(ModelStrategy):
         steps.append(
             (
                 "classifier",
-                SVC(kernel=self.kernel, C=self.C),
+                SVC(kernel=self.kernel, C=self.C, random_state=self.random_state),
             )
         )
         return Pipeline(steps=steps)
 
     def get_name(self) -> str:
         return "svm"
+
+class LinearSVCStrategy(ModelStrategy):
+    def __init__(
+        self,
+        config: Optional[dict] = None,
+        scale: bool = True,
+        feature_type: str = "downsample",
+    ):
+        self.config = config or {}
+        self.C = self.config.get("C", 1.0)
+        self.penalty = self.config.get("penalty", "l1")
+        self.loss = self.config.get("loss", "squared_hinge")
+        self.max_iter = self.config.get("max_iter", 5000)
+        self.kernel = "linear"
+        self.scale = scale
+        self.feature_type = feature_type
+        self._x_train_raw = None
+        self._y_train = None
+        self._x_val_raw = None
+        self._cached_train_features = None
+        self._cached_val_features = None
+
+    def transform_train(self, x: np.ndarray) -> np.ndarray:
+        """Flatten to (n_samples, n_features)"""
+        return self._transform_with_feature_type(x, is_train=True)
+
+    def transform_val(self, x: np.ndarray) -> np.ndarray:
+        """Same transformation as training"""
+        return self._transform_with_feature_type(x, is_train=False)
+
+    def create_model(self) -> Pipeline:
+        """Create a pipeline with optional scaling and Linear SVM classifier"""
+        from sklearn.svm import LinearSVC
+
+        steps = []
+        if self.scale:
+            steps.append(("scaler", StandardScaler()))
+        steps.append(
+            (
+                "classifier",
+                LinearSVC(C=self.C, max_iter=self.max_iter, random_state=2001, penalty=self.penalty, loss=self.loss),
+            )
+        )
+        return Pipeline(steps=steps)
+
+    def get_name(self) -> str:
+        return "linear_svm"
 
 
 class EEGNetStrategy(ModelStrategy):
@@ -346,14 +394,16 @@ def create_features(
         return tfr
     elif feature_type == "tfr_dwt_cmor":
         return transform_to_time_frequency(x, sfreq=256, algorithm="dwt")
-    elif feature_type == "dwt_hierarchical":
-        return transform_to_dwt_hierarchical(x, sfreq=256)
+    elif feature_type == "dwt_hierarchical_allstats":
+        return transform_to_dwt_hierarchical(x, sfreq=256, stats=["mean", "std", "max", "75th_percentile"])
+    elif feature_type == "dwt_hierarchical_mean":
+        return transform_to_dwt_hierarchical(x, sfreq=256, stats=["mean"])
     elif feature_type == "dwt_channel_select":
         if y_train is None:
             raise ValueError("y_train must be provided for dwt_channel_select")
         if x_reference is None:
             raise ValueError("x_reference must be provided for dwt_channel_select")
-        return select_channels_by_mutual_info(x, y_train, x_reference, k_channels=4)
+        return wavelet_channels_by_mutual_info(x, y_train, x_reference, k_channels=4)
     elif feature_type == "tfr_pca":
         tfr = transform_to_time_frequency(x, sfreq=256, algorithm="morlet")
         tfr_pca = pca_feature_selection(tfr, n_components=20)
@@ -370,8 +420,12 @@ def create_features(
             x, sfreq=256, bands=bands, stack_channels=True
         )
     elif feature_type == "bandpower_mean_sd_window":
-        return transform_to_band_power_mean_sd_window(
-            x, sfreq=256, bands=bands, n_windows=6, stack_channels=True
+        return transform_to_band_power_stats_window(
+            x, sfreq=256, bands=bands, n_windows=6, stack_channels=True, stats=["mean", "std"]
+        )
+    elif feature_type == "bandpower_mean_window":
+        return transform_to_band_power_stats_window(
+            x, sfreq=256, bands=bands, n_windows=6, stack_channels=True, stats=["mean"]
         )
     elif feature_type == "bandphase":
         return transform_to_band_phase(x, sfreq=256)

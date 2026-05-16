@@ -29,5 +29,8 @@ Example: ``uv run src/classification.py --model=logistic_regression --feature=ba
 
 Run --help for an overview of the classification cli settings. ``uv run src/classification.py --help``
 
+## schedule.py
+Run ``uv run src/schedule.py`` to run a model training and validation schedule of different models and feature extraction types. Schedules are defined by integers in ``src/schedules.json``. It can also run a grid search across possible parameter configuration defined in ``src/schedule_config.json``.
 
+Example: ``uv run src/schedule.py --use-config -s 6``
 

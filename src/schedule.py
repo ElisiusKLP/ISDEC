@@ -4,6 +4,8 @@ from pathlib import Path
 import json
 import typer
 from rich import print
+from joblib import Parallel, delayed
+from sklearn.model_selection import ParameterGrid
 
 from classification import FEATURE_CHOICES, MODEL_CHOICES, fit_model, get_model_strategy, train_dir, val_dir
 from summarise_results import summarise_results
@@ -45,6 +47,26 @@ def expand_config_grid(model_config: dict[str, object] | None) -> list[dict[str,
 
 	return grid_configs
 
+
+def _run_task(
+	model_name: str, 
+	feature_name: str, scale: bool, 
+	model_config_variant: dict[str, object], 
+	run_idx: int, total_runs: int, 
+	config_idx: int, total_configs: int,
+	n_jobs_subject: int = 1
+	):
+	"""Helper to run a single scheduled job. Separated so it can be parallelized with joblib."""
+	print(f"[{run_idx}/{total_runs}] model={model_name} feature={feature_name} scale={'scale' if scale else 'no_scale'} config_index={config_idx}/{total_configs}")
+	strategy = get_model_strategy(
+		model_name,
+		scale=scale,
+		feature_type=feature_name,
+		config=model_config_variant,
+	)
+	fit_model(strategy, train_dir, val_dir, n_jobs=n_jobs_subject)
+	return True
+
 def main(
 	model: list[str] = typer.Option(
 		list(MODEL_CHOICES),
@@ -77,6 +99,11 @@ def main(
 		"-s",
 		help="Schedule number to run. Overrides other options.",
 	),
+	n_jobs: int = typer.Option(
+		1,
+		"--n-jobs",
+		help="Number of parallel jobs to run using joblib.Parallel (default=1).",
+	),
 ):
 	# Helper to override choices if user provides specific options, otherwise use all.
 	def override_choices(new_choices: list[str], valid_choices: list[str]):
@@ -108,30 +135,37 @@ def main(
 		config = json.load(f)
 
 	runs = list(product(model, feature, scale_state))
-	for index, (model_name, feature_name, state) in enumerate(runs, start=1):
+	# Build task list (model, feature, scale, variant, run_idx, total_runs, config_idx, total_configs)
+	tasks: list[tuple] = []
+	for run_idx, (model_name, feature_name, state) in enumerate(runs, start=1):
 		scale = state == "scale"
-		print(f"[{index}/{len(runs)}] model={model_name} feature={feature_name} scale={state}")
-
 		model_config = config.get(model_name)
-		config_grid = expand_config_grid(model_config)
-		if model_config:
+		if use_config_grid and model_config:
+			grid = list(ParameterGrid(model_config))
 			print(f"Using configuration grid for {model_name}: {model_config}")
+		elif use_config_grid and not model_config:
+			grid = [{}]
+			print(f"No specific configuration found for {model_name} in schedule_config.json. Using defaults")
 		else:
-			print(
-				f"No specific configuration found for {model_name} in schedule_config.json. Using defaults"
-			)
+			grid = [{}]
+			if model_config:
+				print(f"Config exists for {model_name} but --use-config is disabled. Running defaults only")
+			else:
+				print(f"Running defaults for {model_name} (no config grid)")
 
-		for config_index, model_config_variant in enumerate(config_grid, start=1):
-			if len(config_grid) > 1:
-				print(f"  config [{config_index}/{len(config_grid)}]: {model_config_variant}")
+		total_configs = len(grid)
+		for config_idx, variant in enumerate(grid, start=1):
+			tasks.append((model_name, feature_name, scale, variant, run_idx, len(runs), config_idx, total_configs, n_jobs))
 
-			strategy = get_model_strategy(
-				model_name,
-				scale=scale,
-				feature_type=feature_name,
-				config=model_config_variant,
-			)
-			fit_model(strategy, train_dir, val_dir)
+	total_tasks = len(tasks)
+	print(f"Prepared {total_tasks} tasks (models x features x scales x configs). Running with n_jobs={n_jobs}")
+
+	# run tasks sequentially, parrallel over subjects within each task
+	for args in tasks:
+		_run_task(*args)
+
+	# TODO: if we wanted to parallelize across tasks instead of subjects, we could do:
+	#Parallel(n_jobs=n_jobs)(delayed(_run_task)(*args) for args in tasks)
 
 
 if __name__ == "__main__":

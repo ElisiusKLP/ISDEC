@@ -135,10 +135,11 @@ def transform_to_band_power_mean_sd(
         return combined
 
 
-def transform_to_band_power_mean_sd_window(
+def transform_to_band_power_stats_window(
     x: np.ndarray,
     sfreq: float,
     bands: dict[str, tuple[float, float]],
+    stats: list[str] = ["mean", "std"],
     n_windows: int = 6,
     stack_channels: bool = True,
 ) -> np.ndarray:
@@ -184,8 +185,10 @@ def transform_to_band_power_mean_sd_window(
         for i, (_, (fmin, fmax)) in enumerate(bands.items()):
             freq_mask = (freqs >= fmin) & (freqs <= fmax)
             vals = psd[:, :, freq_mask]
-            mean_block[:, :, i] = vals.mean(axis=-1)
-            std_block[:, :, i] = vals.std(axis=-1)
+            if "mean" in stats:
+                mean_block[:, :, i] = vals.mean(axis=-1)
+            if "std" in stats:
+                std_block[:, :, i] = vals.std(axis=-1)
 
         combined = np.concatenate([mean_block, std_block], axis=2)  # (epochs, channels, n_bands*2)
         window_blocks.append(combined)
@@ -323,6 +326,7 @@ def pca_feature_selection(X: np.ndarray, n_components: int) -> np.ndarray:
 def transform_to_dwt_hierarchical(
     x: np.ndarray,
     sfreq: float,
+    stats: list[str] = ["mean"],
 ) -> np.ndarray:
     """
     Transform EEG data into DWT hierarchical features.
@@ -371,12 +375,14 @@ def transform_to_dwt_hierarchical(
             level_stats = []
             for level_coeff in coeffs:
                 level_coeff = np.asarray(level_coeff)
-                level_stats.extend([
-                    np.mean(level_coeff),
-                    np.std(level_coeff),
-                    np.max(np.abs(level_coeff)),
-                    np.percentile(np.abs(level_coeff), 75),
-                ])
+                if "mean" in stats:
+                    level_stats.append(level_coeff.mean())
+                if "std" in stats:
+                    level_stats.append(level_coeff.std())
+                if "max" in stats:
+                    level_stats.append(np.max(level_coeff))
+                if "75th_percentile" in stats:
+                    level_stats.append(np.percentile(level_coeff, 75))
             
             channel_features.append(level_stats)
         
@@ -384,7 +390,7 @@ def transform_to_dwt_hierarchical(
     
     return np.array(epoch_features)
 
-def select_channels_by_mutual_info(
+def wavelet_channels_by_mutual_info(
     x_train: np.ndarray,
     y_train: np.ndarray,
     x_test: np.ndarray,

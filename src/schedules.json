@@ -15,7 +15,7 @@
     "scales": ["scale"]
   },
   "4": {
-    "models": ["random_forest", "svm"],
+    "models": ["random_forest", "svc"],
     "features": ["bandpower_mean_sd", "bandpower_mean_sd_window"],
     "scales": ["scale"]
   },
@@ -23,5 +23,10 @@
     "models": ["random_forest"],
     "features": ["bandpower_mean"],
     "scales": ["scale"]
+  },
+  "6": {
+    "models": ["random_forest", "svc", "logistic_regression", "linear_svc"],
+    "features": ["bandpower_mean", "bandpower_mean_sd", "dwt_hierarchical_mean", "bandpower_mean_window"],
+    "scales": ["scale", "no_scale"]
   }
 }
