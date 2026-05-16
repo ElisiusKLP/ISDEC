@@ -140,6 +140,7 @@ def preprocess(input_dir: Path, set_type: str, use_ica: bool = True) -> None:
     """
     all_files = list(input_dir.glob("*.fif"))
 
+
     for file in tqdm.tqdm(all_files, desc="Preprocessing files"):
         match = re.search(r"epochs_sub-(\d{2})-epo\.fif", file.name)
         if match:
@@ -192,7 +193,7 @@ def preprocess(input_dir: Path, set_type: str, use_ica: bool = True) -> None:
             for label, prob in zip(labels, labels_probs):
                 print(f"Component labeled as {label} with probability {prob:.2f}")
             threshold = 0.8
-            keep_labels = ["brain", "other", "muscle"]
+            keep_labels = ["brain", "other", "muscle artifact"] # optional add: "muscle artifact"
             exclude_idx = [
                 idx for idx, label in enumerate(labels) if label not in keep_labels and labels_probs[idx] >= threshold
             ]
@@ -210,8 +211,16 @@ def preprocess(input_dir: Path, set_type: str, use_ica: bool = True) -> None:
         # Baseline correction
         epochs.apply_baseline((-0.5, 0))
 
-        # Filter
-        epochs.filter(l_freq=1.0, h_freq=40.0, method="iir")
+        # Bandpass Filter
+        epochs.filter(l_freq=1.0, h_freq=100.0, method="iir")
+
+        # Notch Filter
+        # extract epochs array
+        epochs_array = epochs.get_data()
+        print(f"Original epochs array shape: {epochs_array.shape}")
+        filtered_epochs_array = mne.filter.notch_filter(epochs_array, Fs=256, freqs=60, method="iir")
+        print(f"Filtered epochs array shape: {filtered_epochs_array.shape}")
+        epochs._data = filtered_epochs_array
 
         print(f"ICLabel_exclusions: {ICLabel_exclusions}")
         QC(

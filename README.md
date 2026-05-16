@@ -23,13 +23,14 @@ Terminal should have (isdec) infront of user.
 Run ``uv run src/dataset.py`` to convert the competition dataset matlab files into a python-friendly (numpy) format.
 
 ## classification.py
-Run ``uv run src/classification.py --model={{model_name}} --feature={{feature_type}} --scale/--no-scale``
+Run ``uv run src/classification.py`` to train of training set and classify on validation set. 
 
-Model is either: logistic_regression, svm, random_forest
-
-Feature is either: bandpower, downsample, stack
+Example: ``uv run src/classification.py --model=logistic_regression --feature=bandpower --scale``
 
 Run --help for an overview of the classification cli settings. ``uv run src/classification.py --help``
 
+## schedule.py
+Run ``uv run src/schedule.py`` to run a model training and validation schedule of different models and feature extraction types. Schedules are defined by integers in ``src/schedules.json``. It can also run a grid search across possible parameter configuration defined in ``src/schedule_config.json``.
 
+Example: ``uv run src/schedule.py --use-config -s 6``
 
