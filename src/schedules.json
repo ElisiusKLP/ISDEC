@@ -28,5 +28,15 @@
     "models": ["random_forest", "svc", "logistic_regression", "linear_svc"],
     "features": ["bandpower_mean", "bandpower_mean_sd", "dwt_hierarchical_mean", "bandpower_mean_window"],
     "scales": ["scale", "no_scale"]
+  },
+  "7": {
+    "models": ["random_forest", "bagging_rf", "bagging_svc"],
+    "features": ["swvd_mean", "swvd_full", "bandpower_mean"],
+    "scales": ["scale"]
+  },
+    "8": {
+    "models": ["bagging_rf", "bagging_svc"],
+    "features": ["bandpower_mean"],
+    "scales": ["scale"]
   }
 }

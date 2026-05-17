@@ -3,6 +3,7 @@ import jax
 import jax.numpy as jnp
 import optax
 from flax import linen as nn
+from flax import nnx
 from flax.training import train_state
 from typing import Any
 
@@ -35,24 +36,25 @@ class FlaxTrainer:
 
         def loss_fn(params, batch_stats, x, y, rng):
             vars = {"params": params, "batch_stats": batch_stats}
-            (logits, new_vars) = self.model.apply(
+            logits, new_vars = self.model.apply(
                 vars, x, train=True, mutable=["batch_stats"], rngs={"dropout": rng}
             )
             loss = optax.softmax_cross_entropy_with_integer_labels(logits, y).mean()
             return loss, new_vars
 
+        @jax.jit
         def _train_step(state, x, y, rng):
-            grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
-            (loss, new_vars), grads = grad_fn(state.params, state.batch_stats, x, y, rng)
+            # value_and_grad gives ((loss, aux), grads) when has_aux=True
+            (loss, new_vars), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+                state.params, state.batch_stats, x, y, rng
+            )
             state = state.apply_gradients(grads=grads)
-            # new_vars is a dict like {'batch_stats': {...}}
-            state = state.replace(batch_stats=new_vars.get("batch_stats", {}))
+            state = state.replace(batch_stats=new_vars.get("batch_stats", state.batch_stats))
             return state, loss
 
-        self._train_step = jax.jit(_train_step)
+        self._train_step = _train_step
 
     def train_on_batch(self, x: jnp.ndarray, y: jnp.ndarray):
-        print(f"Training on x shape {x.shape} y shape {y.shape}")
         self.rng, step_rng = jax.random.split(self.rng)
         self.state, loss = self._train_step(self.state, x, y, step_rng)
         return float(loss)
@@ -73,7 +75,7 @@ class FlaxSKLearnLikeModel:
     simple `.fit`/`.predict` model object is expected.
     """
 
-    def __init__(self, model: nn.Module, input_shape, epochs: int = 5, batch_size: int = 32, lr: float = 1e-3):
+    def __init__(self, model: nn.Module, input_shape, epochs: int = 25, batch_size: int = 32, lr: float = 1e-3):
         self.trainer = FlaxTrainer(model, input_shape, learning_rate=lr)
         self.epochs = int(epochs)
         self.batch_size = int(batch_size)
@@ -86,16 +88,24 @@ class FlaxSKLearnLikeModel:
             idx = perm[i : i + self.batch_size]
             yield Xj[idx], yj[idx]
 
-    def train_epoch(self, Xj: jnp.ndarray, yj: jnp.ndarray):
+    def train_step(self, Xj: jnp.ndarray, yj: jnp.ndarray) -> float:
+        losses = []
         for xb, yb in self._iter_minibatches(Xj, yj):
-            self.trainer.train_on_batch(xb, yb)
-        return self
+            loss = self.trainer.train_on_batch(xb, yb)
+            losses.append(loss)
+        if not losses:
+            return float("nan")
+        return float(np.mean(losses))
 
     def fit(self, X: np.ndarray, y: np.ndarray):
         Xj = jnp.array(X)
         yj = jnp.array(y).astype(jnp.int32)
-        for _ in range(self.epochs):
-            self.train_epoch(Xj, yj)
+        print(f"[Training] Starting {self.epochs} epochs with batch_size={self.batch_size}", flush=True)
+        for i in range(self.epochs):
+            epoch_loss = self.train_step(Xj, yj)
+            if i % 5 == 0: # print loss metrics every 5 epochs
+                print(f"Epoch {i}/{self.epochs}: loss={epoch_loss:.4f}", flush=True)
+        print(f"[Training] Completed {self.epochs} epochs", flush=True)
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:

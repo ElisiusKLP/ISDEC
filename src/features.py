@@ -225,8 +225,13 @@ def transform_to_time_frequency(
 
     if algorithm == "morlet":
 
-        # specifiy the frequency intervals for the Morlet wavelets. Logarithmic spacing is common for EEG.
-        freqs = np.logspace(np.log10(1), np.log10(100), num=n_freqs)
+        # Specify Morlet frequencies with a Nyquist-safe upper bound.
+        max_freq = min(100.0, (0.5 * sfreq) - 1e-6)
+        if max_freq <= 1.0:
+            raise ValueError(
+                f"Sampling frequency too low for Morlet range: sfreq={sfreq}, max usable freq={max_freq}"
+            )
+        freqs = np.logspace(np.log10(1.0), np.log10(max_freq), num=n_freqs)
         n_cycles = freqs / 2.0  # example: more cycles for higher freqs
 
         if in_bands:
@@ -307,6 +312,73 @@ def transform_to_time_frequency(
         return np.stack(epoch_feature_blocks, axis=0)
     else:
         raise ValueError(f"Unsupported time-frequency algorithm: {algorithm}")
+
+
+def tfr_mortlet_to_cnn(
+    x: np.ndarray,
+    sfreq: float,
+    target_size: int = 256,
+    n_freqs: int = 256,
+    collapse_channels: bool = True,
+    pre_downsample_to_sfreq: float | None = 128.0,
+) -> np.ndarray:
+    """Compute Morlet time-frequency power and return images for CNN.
+
+    Returns array shaped (epochs, H, W, C) where H=n_freqs, W=target_size.
+    If `collapse_channels` is True the channel axis is averaged to produce C=1.
+    This builds on `transform_to_time_frequency` and performs minimal reshaping.
+    """
+    if x.ndim != 3:
+        raise ValueError(f"Expected x with shape (epochs, channels, timepoints), got {x.shape}")
+
+    # Optional pre-downsampling reduces Morlet compute significantly while
+    # preserving the final CNN image size via the later time-axis resample.
+    effective_sfreq = float(sfreq)
+    if pre_downsample_to_sfreq is not None:
+        if pre_downsample_to_sfreq <= 0:
+            raise ValueError(
+                f"pre_downsample_to_sfreq must be > 0, got {pre_downsample_to_sfreq}"
+            )
+        if pre_downsample_to_sfreq < sfreq:
+            x = downsample_time(
+                x,
+                original_sfreq=float(sfreq),
+                target_sfreq=float(pre_downsample_to_sfreq),
+            )
+            effective_sfreq = float(pre_downsample_to_sfreq)
+
+    n_epochs, n_channels, n_timepoints = x.shape
+
+    # compute downsample_to_freq so the function will produce ~target_size timepoints
+    downsample_to_freq = effective_sfreq * float(target_size) / float(n_timepoints)
+
+    flat = transform_to_time_frequency(
+        x,
+        sfreq=effective_sfreq,
+        algorithm="morlet",
+        in_bands=False,
+        downsample_to_freq=downsample_to_freq,
+        n_freqs=n_freqs,
+    )
+
+    # flat has shape (epochs, channels * freqs * timepoints)
+    per_epoch = flat.shape[1]
+    if per_epoch % n_channels != 0:
+        raise ValueError("Unexpected output size from transform_to_time_frequency")
+    per_channel = per_epoch // n_channels
+    if per_channel % n_freqs != 0:
+        raise ValueError("Cannot infer timepoints from transform output; adjust n_freqs or target_size")
+    new_timepoints = per_channel // n_freqs
+
+    power = flat.reshape(n_epochs, n_channels, n_freqs, new_timepoints)
+
+    # convert to images with channel last: (epochs, freqs, time, channels)
+    images = np.transpose(power, (0, 2, 3, 1))
+
+    if collapse_channels:
+        images = images.mean(axis=-1, keepdims=True)
+
+    return images
 
 def mutual_info_feature_selection(X: np.ndarray, y: np.ndarray, k: int) -> np.ndarray:
     """Select top k features based on mutual information with the target."""
@@ -639,3 +711,104 @@ def transform_to_band_power_with_phase(
         phase_feature_blocks.append(phase_features_flat)
 
     return np.concatenate([bandpower_features, *phase_feature_blocks], axis=1)
+
+def smooth_pseudo_wigner_ville_distribution(x: np.ndarray, sfreq: float) -> np.ndarray:
+    n_epochs, n_channels, n_timepoints = x.shape
+    
+    # Patch for scipy compatibility
+    from scipy.integrate import trapezoid
+    import scipy.integrate
+    scipy.integrate.trapz = trapezoid  # type: ignore
+    
+    from scipy.signal.windows import hamming
+    scipy.signal.hamming = hamming  # type: ignore
+    
+    from tftb.processing import WignerVilleDistribution
+    from scipy.ndimage import gaussian_filter
+    
+    tfr_list = []
+    for epoch in range(n_epochs):
+        epoch_tfr_list = []
+        for channel in range(n_channels):
+            # Process single channel at a time
+            signal = x[epoch, channel, :]
+            # downsample long signals to cap memory/time
+            MAX_SIGNAL_LEN = 2048
+            if signal.shape[-1] > MAX_SIGNAL_LEN:
+                from scipy.signal import resample
+                signal_proc = resample(signal, MAX_SIGNAL_LEN)
+            else:
+                signal_proc = signal
+
+            wvd = WignerVilleDistribution(signal_proc, fs=sfreq)
+            result = wvd.run()
+            # normalize result into a 2D ndarray (freq, time)
+            if isinstance(result, np.ndarray):
+                channel_tfr = result
+            else:
+                # result may be a list/sequence of arrays (possibly variable lengths)
+                rows = [np.asarray(r) for r in result]
+                # if rows already 2D-compatible, try vstack
+                try:
+                    channel_tfr = np.vstack(rows)
+                except Exception:
+                    # pad 1D rows to same length
+                    rows1 = [r.ravel() for r in rows]
+                    maxlen = max(r.shape[0] for r in rows1)
+                    padded_rows = [np.pad(r, (0, maxlen - r.shape[0]), mode="constant") for r in rows1]
+                    channel_tfr = np.vstack(padded_rows)
+            epoch_tfr_list.append(channel_tfr)
+        
+        # Pad channel tfrs to common shape then stack
+        max_freq = max(arr.shape[0] for arr in epoch_tfr_list)
+        max_time = max(arr.shape[1] for arr in epoch_tfr_list)
+        padded = []
+        for arr in epoch_tfr_list:
+            pad_freq = max_freq - arr.shape[0]
+            pad_time = max_time - arr.shape[1]
+            pad_width = ((0, pad_freq), (0, pad_time))
+            padded.append(np.pad(arr, pad_width, mode="constant", constant_values=0))
+
+        epoch_tfr = np.stack(padded, axis=0)
+        tfr_list.append(epoch_tfr)
+    
+    tfr = np.stack(tfr_list, axis=0)
+    
+    # Apply gaussian filter
+    smoothed_tfr = gaussian_filter(tfr, sigma=(0, 0, 1, 0))
+    
+    return smoothed_tfr
+
+def transform_to_wigner_ville_features(
+    x: np.ndarray, 
+    sfreq: float,
+    mode: Literal["stats", "full"],
+    stats: list[str] = ["mean"]) -> np.ndarray:
+
+    """
+    Extract features from the smoothed pseudo-Wigner-Ville distribution.
+    """
+
+    tfr = smooth_pseudo_wigner_ville_distribution(x, sfreq)
+    n_epochs, n_channels, n_freqs, n_timepoints = tfr.shape
+
+    if mode == "stats":
+        if stats is None:
+            raise ValueError("stats parameter must be specified when mode='stats'")
+        stat_blocks = []
+        for channel in range(n_channels):
+            channel_tfr = tfr[:, channel, :, :]
+            for stat in stats:
+                if stat == "mean":
+                    stat_blocks.append(channel_tfr.mean(axis=-1))
+                elif stat == "std":
+                    stat_blocks.append(channel_tfr.std(axis=-1))
+                else:
+                    raise ValueError(f"Unsupported stats option: {stat}")
+        return np.concatenate(stat_blocks, axis=1)  # shape (epochs, channels*freqs)
+    elif mode == "full":
+        return tfr.reshape(n_epochs, n_channels * n_freqs * n_timepoints)
+    else:
+        raise ValueError(f"Unsupported mode: {mode}")
+
+    

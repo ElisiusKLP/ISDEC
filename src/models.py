@@ -14,10 +14,12 @@ from features import (
     transform_to_band_power_mean_sd,
     transform_to_band_power_stats_window,
     transform_to_time_frequency,
+    tfr_mortlet_to_cnn,
     pca_feature_selection,
     mutual_info_feature_selection,
     transform_to_dwt_hierarchical,
     wavelet_channels_by_mutual_info,
+    transform_to_wigner_ville_features
 )
 
 # ============================================================================
@@ -159,7 +161,7 @@ class LogisticRegressionStrategy(ModelStrategy):
         ):
         self.config = config or {}
         self.solver = self.config.get("solver", "saga")
-        self.max_iter = self.config.get("max_iter", 5000)
+        self.max_iter = self.config.get("max_iter", 10000)
         self.l1_ratio = self.config.get("l1_ratio", 1)
         self.scale = scale
         self.feature_type = feature_type
@@ -240,7 +242,7 @@ class SVCStrategy(ModelStrategy):
         return Pipeline(steps=steps)
 
     def get_name(self) -> str:
-        return "svm"
+        return "svc"
 
 class LinearSVCStrategy(ModelStrategy):
     def __init__(
@@ -287,8 +289,108 @@ class LinearSVCStrategy(ModelStrategy):
         return Pipeline(steps=steps)
 
     def get_name(self) -> str:
-        return "linear_svm"
+        return "linear_svc"
 
+class BaggingRFStrategy(ModelStrategy):
+    def __init__(
+        self,
+        config: Optional[dict] = None,
+        scale: bool = True,
+        feature_type: str = "stack",
+    ):
+        self.config = config or {}
+        self.n_estimators = self.config.get("n_estimators", 100)
+        self.max_samples = self.config.get("max_samples", 0.8)
+        self.random_state = self.config.get("random_state", 2001)
+        self.scale = scale
+        self.feature_type = feature_type
+        self._x_train_raw = None
+        self._y_train = None
+        self._x_val_raw = None
+        self._cached_train_features = None
+        self._cached_val_features = None
+
+    def transform_train(self, x: np.ndarray) -> np.ndarray:
+        """Reshape to (n_samples, n_features)"""
+        return self._transform_with_feature_type(x, is_train=True)
+
+    def transform_val(self, x: np.ndarray) -> np.ndarray:
+        """Reshape to (n_samples, n_features)"""
+        return self._transform_with_feature_type(x, is_train=False)
+
+    def create_model(self) -> Pipeline:
+        """Create a pipeline with optional scaling and Bagging Random Forest classifier"""
+        from sklearn.ensemble import BaggingClassifier
+
+        steps = []
+        if self.scale:
+            steps.append(("scaler", StandardScaler()))
+        steps.append(
+            (
+                "classifier",
+                BaggingClassifier(
+                    estimator=RandomForestClassifier(n_estimators=self.n_estimators, random_state=self.random_state),
+                    n_estimators=self.n_estimators,
+                    max_samples=self.max_samples,
+                    random_state=self.random_state,
+                ),
+            )
+        )
+        return Pipeline(steps=steps)
+
+    def get_name(self) -> str:
+        return "bagging_rf"
+
+class BaggingSVCStrategy(ModelStrategy):
+    def __init__(
+        self,
+        config: Optional[dict] = None,
+        scale: bool = True,
+        feature_type: str = "stack",
+    ):
+        self.config = config or {}
+        self.n_estimators = self.config.get("n_estimators", 100)
+        self.max_samples = self.config.get("max_samples", 0.8)
+        self.random_state = self.config.get("random_state", 2001)
+        self.scale = scale
+        self.feature_type = feature_type
+        self._x_train_raw = None
+        self._y_train = None
+        self._x_val_raw = None
+        self._cached_train_features = None
+        self._cached_val_features = None
+
+    def transform_train(self, x: np.ndarray) -> np.ndarray:
+        """Reshape to (n_samples, n_features)"""
+        return self._transform_with_feature_type(x, is_train=True)
+
+    def transform_val(self, x: np.ndarray) -> np.ndarray:
+        """Reshape to (n_samples, n_features)"""
+        return self._transform_with_feature_type(x, is_train=False)
+
+    def create_model(self) -> Pipeline:
+        """Create a pipeline with optional scaling and Bagging SVC classifier"""
+        from sklearn.ensemble import BaggingClassifier
+        from sklearn.svm import SVC
+
+        steps = []
+        if self.scale:
+            steps.append(("scaler", StandardScaler()))
+        steps.append(
+            (
+                "classifier",
+                BaggingClassifier(
+                    estimator=SVC(kernel="rbf", C=1.0, random_state=self.random_state),
+                    n_estimators=self.n_estimators,
+                    max_samples=self.max_samples,
+                    random_state=self.random_state,
+                ),
+            )
+        )
+        return Pipeline(steps=steps)
+
+    def get_name(self) -> str:
+        return "bagging_svc"
 
 class EEGNetStrategy(ModelStrategy):
     model_type: str = "deep"
@@ -363,6 +465,82 @@ class EEGNetStrategy(ModelStrategy):
     def get_name(self) -> str:
         return "eegnet"
 
+
+class CNNStrategy(ModelStrategy):
+    model_type: str = "deep"
+
+    def __init__(
+        self,
+        config: Optional[dict] = None,
+        scale: bool = False,
+        feature_type: str = "tfr_morlet",
+        collapse_channels: bool = True,
+    ):
+        self.config = config or {}
+        self.epochs = self.config.get("epochs", 25)
+        self.batch_size = self.config.get("batch_size", 16)
+        self.learning_rate = self.config.get("learning_rate", 1e-3)
+        self.seed = self.config.get("seed", 734)
+        self.scale = scale
+        self.feature_type = feature_type
+        self.collapse_channels = collapse_channels
+        self.input_shape = None
+        self.classes_ = None
+
+    def set_data_info(self, x: np.ndarray, classes: list[int]):
+        # Accept either raw data (epochs, channels, timepoints) or already-extracted
+        # CNN images (epochs, H, W, C). If `x` is raw, compute one example image
+        # to determine the required `input_shape`. If `x` is already images,
+        # infer `input_shape` directly.
+        if x.ndim == 4:
+            # already-shaped images: (epochs, H, W, C)
+            self.input_shape = x.shape[1:]
+        elif x.ndim == 3:
+            imgs = tfr_mortlet_to_cnn(
+                x[:1],
+                sfreq=256,
+                target_size=256,
+                n_freqs=256,
+                collapse_channels=self.collapse_channels,
+            )
+            self.input_shape = imgs.shape[1:]
+        else:
+            raise ValueError(f"Unexpected input shape for set_data_info: {x.shape}")
+        self.classes_ = np.asarray(classes)
+
+    def encode_targets(self, y: np.ndarray) -> np.ndarray:
+        if self.classes_ is None:
+            raise ValueError("Classes have not been set")
+        return np.searchsorted(self.classes_, y)
+
+    def decode_targets(self, y: np.ndarray) -> np.ndarray:
+        if self.classes_ is None:
+            raise ValueError("Classes have not been set")
+        return self.classes_[np.asarray(y, dtype=int)]
+
+    def transform_train(self, x: np.ndarray) -> np.ndarray:
+        # produce images for CNN
+        imgs = tfr_mortlet_to_cnn(x, sfreq=256, target_size=256, n_freqs=256, collapse_channels=self.collapse_channels)
+        return imgs
+
+    def transform_val(self, x: np.ndarray) -> np.ndarray:
+        imgs = tfr_mortlet_to_cnn(x, sfreq=256, target_size=256, n_freqs=256, collapse_channels=self.collapse_channels)
+        return imgs
+
+    def create_model(self) -> Any:
+        # Import here to avoid top-level dependencies
+        from nn_models import CNN as FlaxCNN
+        from nn_train import FlaxSKLearnLikeModel
+
+        if self.input_shape is None or self.classes_ is None:
+            raise ValueError("Input shape and classes must be set before creating the model")
+
+        model = FlaxCNN(n_classes=len(self.classes_), resolution=self.input_shape[0])
+        return FlaxSKLearnLikeModel(model, input_shape=self.input_shape, epochs=self.epochs, batch_size=self.batch_size, lr=self.learning_rate)
+
+    def get_name(self) -> str:
+        return "cnn"
+
 # =======
 # == Create Features function
 # =======
@@ -384,6 +562,9 @@ def create_features(
 
     if feature_type == "tfr_morlet":
         return transform_to_time_frequency(x, sfreq=256, algorithm="morlet")
+    elif feature_type == "tfr_morlet_cnn":
+        # Return images shaped (epochs, H, W, C) suitable for CNN input
+        return tfr_mortlet_to_cnn(x, sfreq=256, target_size=256, n_freqs=256, collapse_channels=True)
     elif feature_type == "tfr_morlet_bands":
         tfr = transform_to_time_frequency(
             x, sfreq=256, algorithm="morlet",
@@ -394,6 +575,10 @@ def create_features(
         return tfr
     elif feature_type == "tfr_dwt_cmor":
         return transform_to_time_frequency(x, sfreq=256, algorithm="dwt")
+    elif feature_type == "swvd_mean":
+        return transform_to_wigner_ville_features(x, sfreq=256, mode="stats", stats=["mean"])
+    elif feature_type == "swvd_full":
+        return transform_to_wigner_ville_features(x, sfreq=256, mode="full")
     elif feature_type == "dwt_hierarchical_allstats":
         return transform_to_dwt_hierarchical(x, sfreq=256, stats=["mean", "std", "max", "75th_percentile"])
     elif feature_type == "dwt_hierarchical_mean":

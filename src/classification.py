@@ -54,7 +54,10 @@ MODEL_REGISTRY = {
     "logistic_regression": models.LogisticRegressionStrategy,
     "svc": models.SVCStrategy,
     "linear_svc": models.LinearSVCStrategy,
+    "bagging_rf": models.BaggingRFStrategy,
+    "bagging_svc": models.BaggingSVCStrategy,
     "eegnet": models.EEGNetStrategy,
+    "cnn": models.CNNStrategy,
 }
 
 FEATURE_TYPES = [
@@ -62,6 +65,9 @@ FEATURE_TYPES = [
     "tfr_morlet",
     "tfr_morlet_bands",
     "tfr_dwt_cmor",
+    "tfr_morlet_cnn",
+    "swvd_mean",
+    "swvd_full",
     "dwt_hierarchical_allstats",
     "dwt_hierarchical_mean",
     "dwt_channel_select",
@@ -89,7 +95,7 @@ def get_model_strategy(model_name: str, scale: bool = True, feature_type: str = 
         raise ValueError(
             f"Unknown feature type: {feature_type}. Available: {FEATURE_TYPES}"
         )
-    if model_name == "eegnet":
+    if getattr(MODEL_REGISTRY[model_name], "model_type", None) == "deep":
         # EEGNet can take on feature extraction
         if feature_type != "raw" and feature_type in FEATURE_TYPES:
             return MODEL_REGISTRY[model_name](scale=False, feature_type=feature_type, config=config)
@@ -103,7 +109,14 @@ def get_model_strategy(model_name: str, scale: bool = True, feature_type: str = 
 # Main training function
 # ============================================================================
 
-def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: Path | None = None, n_jobs: int = 1):
+def fit_model(
+    strategy: ModelStrategy,
+    train_dir: Path | None = None,
+    val_dir: Path | None = None,
+    n_jobs: int = 1,
+    verbose: bool = False,
+    cache_features: bool = True,
+):
     """Train and validate model using the given strategy"""
     if train_dir is None or val_dir is None:
         train_dir, val_dir = strategy.get_data_dirs()
@@ -163,6 +176,16 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
     timing_log_path = log_dir / f"{run_tag}_timing.log"
     summary_path = log_dir / f"{run_tag}_summary.txt"
 
+    # Cache feature transforms so reruns do not recompute them. Enable caching
+    # for all feature types when the CLI flag is set.
+    enable_feature_cache = bool(cache_features)
+    feature_cache_dir = Path("data/derivatives/features_cache") / strategy_feature_type
+    train_feature_cache_dir = feature_cache_dir / "training_set"
+    val_feature_cache_dir = feature_cache_dir / "validation_set"
+    if enable_feature_cache:
+        train_feature_cache_dir.mkdir(parents=True, exist_ok=True)
+        val_feature_cache_dir.mkdir(parents=True, exist_ok=True)
+
     # Create files with headers if they don't exist so we can append per-subject entries safely
     if not score_log_path.exists():
         with open(score_log_path, "w") as f:
@@ -200,8 +223,18 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
         if callable(set_raw_data):
             set_raw_data(X_train, y_train, x_val)
 
-        # feature transform
-        X_train_feats = strategy_worker.transform_train(X_train)
+        # feature transform with progress indicator for slow transforms
+        train_cache_path = train_feature_cache_dir / f"{file_path.stem}.joblib"
+        if enable_feature_cache and train_cache_path.exists():
+            print(f"    [Feature extraction... cache hit: {train_cache_path.name}]", flush=True)
+            X_train_feats = joblib.load(train_cache_path)
+        else:
+            print(f"    [Feature extraction...]", end="", flush=True)
+            X_train_feats = strategy_worker.transform_train(X_train)
+            print(f" done. Shape: {X_train_feats.shape}", flush=True)
+            if enable_feature_cache:
+                joblib.dump(X_train_feats, train_cache_path, compress=3)
+                print(f"    [Saved feature cache: {train_cache_path.name}]", flush=True)
         set_data_info = getattr(strategy_worker, "set_data_info", None)
         if callable(set_data_info) and getattr(strategy_worker, "input_shape", None) is None:
             set_data_info(X_train_feats, class_labels)
@@ -213,14 +246,27 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
             y_train_fit = y_train
 
         model = strategy_worker.create_model()
+        print(f"    [Training model...]", flush=True)
         t0 = time.perf_counter()
         model.fit(X_train_feats, y_train_fit)
         train_time = time.perf_counter() - t0
 
-        x_val_feats = strategy_worker.transform_val(x_val)
+        val_cache_path = val_feature_cache_dir / f"{val_file.stem}.joblib"
+        if enable_feature_cache and val_cache_path.exists():
+            print(f"    [Validation feature extraction... cache hit: {val_cache_path.name}]", flush=True)
+            x_val_feats = joblib.load(val_cache_path)
+        else:
+            print(f"    [Validation feature extraction...]", end="", flush=True)
+            x_val_feats = strategy_worker.transform_val(x_val)
+            print(f" done.", flush=True)
+            if enable_feature_cache:
+                joblib.dump(x_val_feats, val_cache_path, compress=3)
+                print(f"    [Saved validation cache: {val_cache_path.name}]", flush=True)
 
+        print(f"    [Predicting...]", end="", flush=True)
         t1 = time.perf_counter()
         raw_pred = model.predict(x_val_feats)
+        print(f" done.", flush=True)
         predict_time = time.perf_counter() - t1
         decode_targets = getattr(strategy_worker, "decode_targets", None)
         if callable(decode_targets):
@@ -286,9 +332,12 @@ def fit_model(strategy: ModelStrategy, train_dir: Path | None = None, val_dir: P
     from joblib import Parallel, delayed
 
     if n_jobs == 1:
-        results = [_process_subject(f) for f in tqdm(train_files, desc="Training models on subjects")]
+        # When verbose, disable tqdm so nested prints are visible; otherwise show progress
+        results = [_process_subject(f) for f in tqdm(train_files, desc="Training models on subjects", disable=False)]
     else:
-        results = Parallel(n_jobs=n_jobs)(delayed(_process_subject)(f) for f in train_files)
+        # Use verbose=10 to show output per job when verbose flag is True
+        parallel_verbose = 10 if verbose else 0
+        results = Parallel(n_jobs=n_jobs, verbose=parallel_verbose)(delayed(_process_subject)(f) for f in train_files)
 
     # collect results and aggregate
     for res in results:
@@ -414,15 +463,19 @@ def main(
         help="Type of features to create.",
         click_type=click.Choice(FEATURE_CHOICES),
     ),
-    scale: bool = typer.Option(True, "--scale/--no-scale", help="Enable feature scaling.")
+    scale: bool = typer.Option(True, "--scale/--no-scale", help="Enable feature scaling."),
+    verbose: bool = typer.Option(False, "--verbose/--quiet", help="Show detailed output (print statements, loss, etc.) during training."),
+    cache_features: bool = typer.Option(True, "--cache-features/--no-cache-features", help="Cache expensive transformed features (Morlet variants) to disk and reuse on reruns."),
 ):
     print(f"Training model: {model}")
     print(f"Feature type: {feature}")
     print(f"Scaling enabled: {scale}")
+    print(f"Verbose output: {verbose}")
+    print(f"Feature cache: {cache_features}")
     strategy = get_model_strategy(model, scale=scale, feature_type=feature)
     print(f"Data kind: {getattr(strategy, 'model_type', 'None')}")
 
-    fit_model(strategy, *strategy.get_data_dirs())
+    fit_model(strategy, *strategy.get_data_dirs(), verbose=verbose, cache_features=cache_features)
 
 
 if __name__ == "__main__":
