@@ -968,20 +968,26 @@ def test_feature_extraction(n_subjects: int = 5, sfreq: float = 200.0):
 
             # use a small subset for testing to limit runtime/memory
             X_sub = X[:2] if n_epochs >= 2 else X[:1]
-            tfr_stats = transform_to_wigner_ville_features(X_sub, sfreq=sfreq, mode="stats", stats=["mean"])
-            print(f"✓ shape: {tfr_stats.shape}")
 
-            # visualise first epoch by splitting channels × freqs
-            per_channel_freq = tfr_stats.shape[1] // n_channels
-            vis = tfr_stats[0].reshape(n_channels, per_channel_freq)
-            fig = plt.figure(figsize=(6, 4))
-            plt.imshow(vis, aspect='auto', origin='lower', cmap='viridis')
-            plt.title("SWVD (stats mean) — epoch 0")
-            plt.colorbar(label='Value')
-            fig_path = subject_dir / f"{subject_name}_swvd_stats_mean.png"
-            fig.savefig(fig_path, dpi=100, bbox_inches='tight')
-            plt.close(fig)
-            print(f"    Saved: {fig_path.name}")
+            for mode in ["bands", "log_bins"]:
+                print(f"\n    Mode: {mode}")
+                tfr_stats = transform_to_wigner_ville_features(
+                    X_sub, sfreq=sfreq, mode="stats", stats=["mean"],
+                    freq_aggregation=mode, n_freq_bins=10, bands=DEFAULT_BANDS
+                )
+                print(f"✓ shape: {tfr_stats.shape}")
+
+                # visualise first epoch by splitting channels × freqs
+                per_channel_freq = tfr_stats.shape[1] // n_channels
+                vis = tfr_stats[0].reshape(n_channels, per_channel_freq)
+                fig = plt.figure(figsize=(6, 4))
+                plt.imshow(vis, aspect='auto', origin='lower', cmap='viridis')
+                plt.title("SWVD (stats mean) — epoch 0")
+                plt.colorbar(label='Value')
+                fig_path = subject_dir / f"{subject_name}_swvd_stats_mean_{mode}.png"
+                fig.savefig(fig_path, dpi=100, bbox_inches='tight')
+                plt.close(fig)
+                print(f"    Saved: {fig_path.name}")
 
         except Exception as e:
             print(f"✗ Error: {e}")

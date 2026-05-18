@@ -61,23 +61,38 @@ MODEL_REGISTRY = {
 }
 
 FEATURE_TYPES = [
-    "downsample", 
+    "downsample_32hz",
+    "downsample_4hz",
     "tfr_morlet",
     "tfr_morlet_bands",
+    "tfr_morlet_bands_stats",
+    "tfr_morlet_bands_stats_mi",
     "tfr_dwt_cmor",
     "tfr_morlet_cnn",
-    "swvd_mean",
+    "stft_bands_stats",
+    "stft_bands_stats_mi",
+    "swvd_band_mean",
+    "swvd_logbins_mean",
     "swvd_full",
+    "swvd_cnn",
     "dwt_hierarchical_allstats",
     "dwt_hierarchical_mean",
+    "dwt_mean_256Hz",
+    "dwt_mean_32Hz",
+    "dwt_mean_4Hz",
     "dwt_channel_select",
+    "dwt_stats",
+    "dwt_stats_mi",
     "tfr_pca",
     "bandpower_mean",
+    "bandpower_mean_mi",
     "bandpower_mean_sd",
     "bandpower_mean_window",
     "bandpower_mean_sd_window",
     "bandpower_phase",
     "stack",
+    "mean",
+    "mean_mi",
     "bandphase"
 ]
 
@@ -142,8 +157,6 @@ def fit_model(
     aggregate_samples = 0
     aggregate_correct = 0
     
-    # setup a score logger
-    score_logger = []
     strategy_scale = bool(getattr(strategy, "scale", True))
     strategy_feature_type = str(getattr(strategy, "feature_type", "stack"))
     strategy_config = getattr(strategy, "config", None)
@@ -282,6 +295,14 @@ def fit_model(
 
         confusion_matrix_val = confusion_matrix(y_val, y_pred, labels=class_labels)
 
+        with open(score_log_path, "a") as f:
+            f.write(
+                f"{file_path.stem},{score:.4f},{chance_baseline:.4f},"
+                f"{majority_baseline:.4f},{delta_over_chance:.4f},"
+                f"{delta_over_majority:.4f}\n"
+            )
+        print(f"Saved scores to {score_log_path.resolve()}")
+
         # save plot for this subject
         disp = sklearn.metrics.ConfusionMatrixDisplay(
             confusion_matrix=confusion_matrix_val,
@@ -339,18 +360,7 @@ def fit_model(
         parallel_verbose = 10 if verbose else 0
         results = Parallel(n_jobs=n_jobs, verbose=parallel_verbose)(delayed(_process_subject)(f) for f in train_files)
 
-    # collect results and aggregate
     for res in results:
-        score_logger.append({
-            "subject": res["subject"],
-            "score": res["score"],
-            "chance_baseline": res["chance_baseline"],
-            "majority_baseline": res["majority_baseline"],
-            "delta_over_chance": res["delta_over_chance"],
-            "delta_over_majority": res["delta_over_majority"],
-            "train_time": res["train_time"],
-            "predict_time": res["predict_time"],
-        })
         aggregate_confusion += res["confusion_matrix"]
         aggregate_samples += int(res["confusion_matrix"].sum())
         aggregate_correct += np.trace(res["confusion_matrix"])
@@ -370,8 +380,8 @@ def fit_model(
 
     # Final aggregate summary
     overall_accuracy = aggregate_correct / aggregate_samples if aggregate_samples > 0 else 0.0
-    mean_subject_score = float(np.mean([entry["score"] for entry in score_logger]))
-    mean_majority_baseline = float(np.mean([entry["majority_baseline"] for entry in score_logger]))
+    mean_subject_score = float(np.mean([entry["score"] for entry in results])) if results else 0.0
+    mean_majority_baseline = float(np.mean([entry["majority_baseline"] for entry in results])) if results else 0.0
     row_sums = aggregate_confusion.sum(axis=1, keepdims=True)
     normalized_confusion = np.divide(
         aggregate_confusion,
@@ -419,30 +429,18 @@ def fit_model(
         f.write(summary_text.lstrip("\n") + "\n")
     print(f"Saved summary to {summary_path.resolve()}")
 
-    # save scores to a log file
+    # save timing log file
     score_log_dir = base_dir / "logs"
     score_log_dir.mkdir(parents=True, exist_ok=True)
-    score_log_path = score_log_dir / f"{run_tag}_scores.csv"
-    with open(score_log_path, "w") as f:
-        f.write("subject,score,chance_baseline,majority_baseline,delta_over_chance,delta_over_majority\n")
-        for entry in score_logger:
-            f.write(
-                f"{entry['subject']},{entry['score']:.4f},{entry['chance_baseline']:.4f},"
-                f"{entry['majority_baseline']:.4f},{entry['delta_over_chance']:.4f},"
-                f"{entry['delta_over_majority']:.4f}\n"
-            )
-    print(f"Saved scores to {score_log_path.resolve()}")
-
-    # save timing log file
     timing_log_path = score_log_dir / f"{run_tag}_timing.log"
-    mean_train_time = float(np.mean([entry["train_time"] for entry in score_logger]))
-    mean_predict_time = float(np.mean([entry["predict_time"] for entry in score_logger]))
+    mean_train_time = float(np.mean([entry["train_time"] for entry in results])) if results else 0.0
+    mean_predict_time = float(np.mean([entry["predict_time"] for entry in results])) if results else 0.0
     with open(timing_log_path, "w") as f:
         f.write("Per-Subject Timing Log\n")
         f.write(f"Model: {strategy.get_name()} | Feature Type: {feature_tag} | Scale: {scale_tag}\n")
         f.write("\n")
         f.write("subject,train_time_sec,predict_time_sec\n")
-        for entry in score_logger:
+        for entry in results:
             f.write(
                 f"{entry['subject']},{entry['train_time']:.2f},{entry['predict_time']:.2f}\n"
             )

@@ -151,8 +151,24 @@ def preprocess(input_dir: Path, set_type: str, use_ica: bool = True) -> None:
 
         subject_file = mne.read_epochs(file)
 
-        epochs = subject_file.copy().filter(l_freq=1.0, h_freq=100.0, method="iir")
+        epochs = subject_file.copy()
+
+        # Notch Filter
+        # extract epochs array
+        epochs_array = epochs.get_data()
+        print(f"Original epochs array shape: {epochs_array.shape}")
+        filtered_epochs_array = mne.filter.notch_filter(epochs_array, Fs=256, freqs=60, method="iir")
+        print(f"Filtered epochs array shape: {filtered_epochs_array.shape}")
+        epochs._data = filtered_epochs_array
+
+        # Bandpass Filter
+        epochs.filter(l_freq=0.5, h_freq=100, method="iir")
+
+        # Re-reference to average
         epochs.set_eeg_reference(ref_channels="average")
+        
+        # create copy for ICA fitting
+        epochs_for_ica = epochs.copy().filter(l_freq=1.0, h_freq=100.0, method="iir")
 
         ica: Optional[ICA] = None
 
@@ -168,7 +184,7 @@ def preprocess(input_dir: Path, set_type: str, use_ica: bool = True) -> None:
             ica_filename = output_dir / "ica" / set_type / f"ica_sub-{sub_id}-ica.fif"
             ica_filename.parent.mkdir(parents=True, exist_ok=True)
 
-            ica.fit(epochs.copy())
+            ica.fit(epochs_for_ica)
             describe_ica(ica)
             print(f"ICA n_components_={getattr(ica, 'n_components_', None)} for subject {sub_id}")
             ica.save(ica_filename, overwrite=True)
@@ -187,7 +203,7 @@ def preprocess(input_dir: Path, set_type: str, use_ica: bool = True) -> None:
 
         if ica is not None:
             # ICLabeling
-            ic_labels = label_components(epochs, ica, "iclabel")
+            ic_labels = label_components(epochs_for_ica, ica, "iclabel")
             labels = ic_labels["labels"]
             labels_probs = ic_labels["y_pred_proba"]
             for label, prob in zip(labels, labels_probs):
@@ -210,17 +226,6 @@ def preprocess(input_dir: Path, set_type: str, use_ica: bool = True) -> None:
 
         # Baseline correction
         epochs.apply_baseline((-0.5, 0))
-
-        # Bandpass Filter
-        epochs.filter(l_freq=1.0, h_freq=100.0, method="iir")
-
-        # Notch Filter
-        # extract epochs array
-        epochs_array = epochs.get_data()
-        print(f"Original epochs array shape: {epochs_array.shape}")
-        filtered_epochs_array = mne.filter.notch_filter(epochs_array, Fs=256, freqs=60, method="iir")
-        print(f"Filtered epochs array shape: {filtered_epochs_array.shape}")
-        epochs._data = filtered_epochs_array
 
         print(f"ICLabel_exclusions: {ICLabel_exclusions}")
         QC(

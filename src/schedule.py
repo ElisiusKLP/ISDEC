@@ -162,7 +162,11 @@ def main(
 
 	# run tasks sequentially, parrallel over subjects within each task
 	for args in tasks:
-		_run_task(*args)
+		try:
+			_run_task(*args)
+		except Exception as e:
+			print(f"Error running task with args {args}: {e}")
+			continue
 
 	# TODO: if we wanted to parallelize across tasks instead of subjects, we could do:
 	#Parallel(n_jobs=n_jobs)(delayed(_run_task)(*args) for args in tasks)

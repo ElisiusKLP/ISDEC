@@ -1,3 +1,7 @@
+from docutils.utils.math.mathml_elements import mi
+from etils.etree import stack
+from jax.lax import ne
+from PIL.Image import new
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 from pathlib import Path
@@ -19,7 +23,10 @@ from features import (
     mutual_info_feature_selection,
     transform_to_dwt_hierarchical,
     wavelet_channels_by_mutual_info,
-    transform_to_wigner_ville_features
+    transform_to_wigner_ville_features, select_channels_by_mutual_info,
+    transform_to_dwt_level_stats,
+    transform_to_morlet_stats,
+    transform_to_stft_bands_stats
 )
 
 # ============================================================================
@@ -74,7 +81,16 @@ class ModelStrategy(ABC):
         """Shared transform path for classic models."""
         feature_type = getattr(self, "feature_type", "stack")
 
-        if feature_type != "dwt_channel_select":
+        shared_mi_feature_types = {
+            "dwt_channel_select",
+            "dwt_stats_mi",
+            "bandpower_mean_mi",
+            "mean_mi",
+            "stft_bands_stats_mi",
+            "tfr_morlet_bands_stats_mi",
+        }
+
+        if feature_type not in shared_mi_feature_types:
             return create_features(x, feature_type=feature_type)
 
         cached_train = getattr(self, "_cached_train_features", None)
@@ -477,7 +493,7 @@ class CNNStrategy(ModelStrategy):
         collapse_channels: bool = True,
     ):
         self.config = config or {}
-        self.epochs = self.config.get("epochs", 25)
+        self.epochs = self.config.get("epochs", 100)
         self.batch_size = self.config.get("batch_size", 16)
         self.learning_rate = self.config.get("learning_rate", 1e-3)
         self.seed = self.config.get("seed", 734)
@@ -496,13 +512,7 @@ class CNNStrategy(ModelStrategy):
             # already-shaped images: (epochs, H, W, C)
             self.input_shape = x.shape[1:]
         elif x.ndim == 3:
-            imgs = tfr_mortlet_to_cnn(
-                x[:1],
-                sfreq=256,
-                target_size=256,
-                n_freqs=256,
-                collapse_channels=self.collapse_channels,
-            )
+            imgs = create_features(x, feature_type=self.feature_type)
             self.input_shape = imgs.shape[1:]
         else:
             raise ValueError(f"Unexpected input shape for set_data_info: {x.shape}")
@@ -520,11 +530,11 @@ class CNNStrategy(ModelStrategy):
 
     def transform_train(self, x: np.ndarray) -> np.ndarray:
         # produce images for CNN
-        imgs = tfr_mortlet_to_cnn(x, sfreq=256, target_size=256, n_freqs=256, collapse_channels=self.collapse_channels)
+        imgs = create_features(x, feature_type=self.feature_type)
         return imgs
 
     def transform_val(self, x: np.ndarray) -> np.ndarray:
-        imgs = tfr_mortlet_to_cnn(x, sfreq=256, target_size=256, n_freqs=256, collapse_channels=self.collapse_channels)
+        imgs = create_features(x, feature_type=self.feature_type)
         return imgs
 
     def create_model(self) -> Any:
@@ -560,11 +570,13 @@ def create_features(
             "gamma": (30.0, 100.0),
         }
 
+    mi_k_channels = 16
+
     if feature_type == "tfr_morlet":
         return transform_to_time_frequency(x, sfreq=256, algorithm="morlet")
     elif feature_type == "tfr_morlet_cnn":
         # Return images shaped (epochs, H, W, C) suitable for CNN input
-        return tfr_mortlet_to_cnn(x, sfreq=256, target_size=256, n_freqs=256, collapse_channels=True)
+        return tfr_mortlet_to_cnn(x, sfreq=256, target_size=256, n_freqs=256, collapse_channels=True, max_signal_len=512)
     elif feature_type == "tfr_morlet_bands":
         tfr = transform_to_time_frequency(
             x, sfreq=256, algorithm="morlet",
@@ -573,16 +585,101 @@ def create_features(
             n_freqs=20
         )
         return tfr
+    elif feature_type == "tfr_morlet_bands_stats":
+        return transform_to_morlet_stats(
+            x, sfreq=256, bands=bands,
+            stack_channels=True
+        )
+    elif feature_type == "tfr_morlet_bands_stats_mi":
+        if y_train is None:
+            raise ValueError("y_train must be provided for tfr_morlet_bands_stats_mi")
+        y_train_arr = y_train
+        tfr = transform_to_morlet_stats(x, sfreq=256, bands=bands, stack_channels=False)
+        tfr = tfr.reshape(tfr.shape[0], tfr.shape[1], -1)
+        new_x_train, selected_indices = select_channels_by_mutual_info(
+            tfr,
+            y_train=y_train_arr,
+            k_channels=mi_k_channels,
+        )
+        if x_reference is not None:
+            reference_tfr = transform_to_morlet_stats(x_reference, sfreq=256, bands=bands, stack_channels=False)
+            reference_tfr = reference_tfr.reshape(reference_tfr.shape[0], reference_tfr.shape[1], -1)  # (epochs, channels, features)   
+            new_x_reference = reference_tfr[:, selected_indices, :]
+            return new_x_train.reshape(new_x_train.shape[0], -1), new_x_reference.reshape(new_x_reference.shape[0], -1)
+
+        return new_x_train.reshape(new_x_train.shape[0], -1)
+    elif feature_type == "stft_bands_stats":
+        _, _, tfr = transform_to_stft_bands_stats(
+            x, sfreq=256, bands=bands
+        )
+        return tfr
+    elif feature_type == "stft_bands_stats_mi":
+        if y_train is None:
+            raise ValueError("y_train must be provided for stft_bands_stats_mi")
+        y_train_arr = y_train
+        _, tfr, _ = transform_to_stft_bands_stats(x, sfreq=256, bands=bands)
+        tfr = tfr.reshape(tfr.shape[0], tfr.shape[1], -1)
+        new_x_train, selected_indices = select_channels_by_mutual_info(
+            tfr,
+            y_train=y_train_arr,
+            k_channels=mi_k_channels,
+        )
+        if x_reference is not None:
+            _, reference_tfr, _ = transform_to_stft_bands_stats(x_reference, sfreq=256, bands=bands)
+            reference_tfr = reference_tfr.reshape(reference_tfr.shape[0], reference_tfr.shape[1], -1)
+            new_x_reference = reference_tfr[:, selected_indices, :]
+            return new_x_train.reshape(new_x_train.shape[0], -1), new_x_reference.reshape(new_x_reference.shape[0], -1)
+
+        return new_x_train.reshape(new_x_train.shape[0], -1)
     elif feature_type == "tfr_dwt_cmor":
         return transform_to_time_frequency(x, sfreq=256, algorithm="dwt")
-    elif feature_type == "swvd_mean":
-        return transform_to_wigner_ville_features(x, sfreq=256, mode="stats", stats=["mean"])
+    elif feature_type == "swvd_band_mean":
+        return transform_to_wigner_ville_features(
+            x, sfreq=256, mode="stats", stats=["mean"],
+            freq_aggregation="bands", bands=bands
+            )
+    elif feature_type == "swvd_logbins_mean":
+        return transform_to_wigner_ville_features(
+            x, sfreq=256, mode="stats", stats=["mean"],
+            freq_aggregation="log_bins", n_freq_bins=10
+            )
     elif feature_type == "swvd_full":
         return transform_to_wigner_ville_features(x, sfreq=256, mode="full")
+    elif feature_type == "swvd_cnn":
+        return transform_to_wigner_ville_features(
+            x, sfreq=256, mode="full",
+            freq_aggregation="cnn", cnn_target_size=128, max_signal_len=512
+        )
     elif feature_type == "dwt_hierarchical_allstats":
         return transform_to_dwt_hierarchical(x, sfreq=256, stats=["mean", "std", "max", "75th_percentile"])
     elif feature_type == "dwt_hierarchical_mean":
         return transform_to_dwt_hierarchical(x, sfreq=256, stats=["mean"])
+    #elif feature_type == "dwt_mean_256Hz":
+    #    return transform_to_dwt_hierarchical(x, sfreq=256, stats=["mean"])
+    #elif feature_type == "dwt_mean_32Hz":
+    #    tfr = transform_to_dwt_hierarchical(x, sfreq=256, stats=["mean"])    
+    #    return tfr
+    #elif feature_type == "dwt_mean_4Hz":
+    #    return
+    elif feature_type == "dwt_stats":
+        _, _, tfr = transform_to_dwt_level_stats(x, sfreq=256)
+        return tfr
+    elif feature_type == "dwt_stats_mi":
+        if y_train is None:
+            raise ValueError("y_train must be provided for dwt_stats_mi")
+        y_train_arr = y_train
+        _, train_features, _ = transform_to_dwt_level_stats(x, sfreq=256)
+        new_x_train, selected_indices = select_channels_by_mutual_info(
+            train_features,
+            y_train=y_train_arr,
+            k_channels=mi_k_channels,
+        )
+        if x_reference is not None:
+            _, reference_features, _ = transform_to_dwt_level_stats(x_reference, sfreq=256)
+            new_x_reference = reference_features[:, selected_indices, :]
+            return new_x_train.reshape(new_x_train.shape[0], -1), new_x_reference.reshape(new_x_reference.shape[0], -1)
+
+        return new_x_train.reshape(new_x_train.shape[0], -1)
     elif feature_type == "dwt_channel_select":
         if y_train is None:
             raise ValueError("y_train must be provided for dwt_channel_select")
@@ -600,6 +697,29 @@ def create_features(
             x, sfreq=256, bands=bands,
             mean=True, stack_channels=True
         )
+    elif feature_type == "bandpower_mean_mi":
+        if y_train is None:
+            raise ValueError("y_train must be provided for bandpower_mean_mi")
+        y_train_arr = y_train
+        bandpower = transform_to_band_power(x, sfreq=256, bands=bands, mean=True, stack_channels=False)
+        new_x_train, selected_indices = select_channels_by_mutual_info(
+            bandpower,
+            y_train=y_train_arr,
+            k_channels=mi_k_channels,
+        )
+        if x_reference is not None:
+            reference_bandpower = transform_to_band_power(
+                x_reference,
+                sfreq=256,
+                bands=bands,
+                mean=True,
+                stack_channels=False,
+            )
+            new_x_reference = reference_bandpower[:, selected_indices, :]
+            return new_x_train.reshape(new_x_train.shape[0], -1), new_x_reference.reshape(new_x_reference.shape[0], -1)
+
+        return new_x_train.reshape(new_x_train.shape[0], -1)
+
     elif feature_type == "bandpower_mean_sd":
         return transform_to_band_power_mean_sd(
             x, sfreq=256, bands=bands, stack_channels=True
@@ -619,10 +739,32 @@ def create_features(
             x,
             sfreq=256,
         )
-    elif feature_type == "downsample":
-        downsample = downsample_time(x, original_sfreq=256, target_sfreq=50)  # example sfreq, adjust as needed
+    elif feature_type == "downsample_32hz":
+        downsample = downsample_time(x, original_sfreq=256, target_sfreq=32)  # example sfreq, adjust as needed
+        return downsample.reshape(downsample.shape[0], -1)
+    elif feature_type == "downsample_4hz":
+        downsample = downsample_time(x, original_sfreq=256, target_sfreq=4)  # example sfreq, adjust as needed
         return downsample.reshape(downsample.shape[0], -1)
     elif feature_type == "stack":
         return x.reshape(x.shape[0], -1)
+    elif feature_type == "mean":
+        mean = x.mean(axis=-1)
+        return mean.reshape(mean.shape[0], -1)
+    elif feature_type == "mean_mi":
+        if y_train is None:
+            raise ValueError("y_train must be provided for mean_mi")
+        y_train_arr = y_train
+        mean = x.mean(axis=-1)[:, :, None]
+        new_x_train, selected_indices = select_channels_by_mutual_info(
+            mean,
+            y_train=y_train_arr,
+            k_channels=mi_k_channels,
+        )
+        if x_reference is not None:
+            reference_mean = x_reference.mean(axis=-1)[:, :, None]
+            new_x_reference = reference_mean[:, selected_indices, :]
+            return new_x_train.reshape(new_x_train.shape[0], -1), new_x_reference.reshape(new_x_reference.shape[0], -1)
+
+        return new_x_train.reshape(new_x_train.shape[0], -1)
     else:
         raise ValueError(f"Unknown feature type: {feature_type}")
