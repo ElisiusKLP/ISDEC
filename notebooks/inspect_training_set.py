@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.3"
+__generated_with = "0.23.6"
 app = marimo.App()
 
 
@@ -20,6 +20,8 @@ def _():
     import scipy.io as sio
     import numpy as np
     import h5py
+    import plotly.graph_objects as go
+
 
     return Path, mne, np, os, sio
 
@@ -159,7 +161,7 @@ def _(epo, mne, np):
 
     montage = mne.channels.make_standard_montage("standard_1020")
     epochs.set_montage(montage)
-    return (epochs,)
+    return ch_names, epochs, sfreq, x_t
 
 
 @app.cell
@@ -168,9 +170,55 @@ def _(mne):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # Time frequency
+    """)
+    return
+
+
 @app.cell
-def _():
-    # save raw epochs to disk
+def _(ch_names, mne, np, plt, sfreq, x_t):
+    print(f"x_t shape: {x_t.shape}")
+    _, n_channels, n_timepoints = x_t.shape
+
+    # choose n_fft safely so it does not exceed the signal length (Welch requirement)
+    n_fft_param = min(256, n_timepoints)
+
+    bands = {
+            "delta": (1.0, 4.0),
+            "theta": (4.0, 8.0),
+            "alpha": (8.0, 13.0),
+            "beta": (13.0, 30.0),
+            "gamma": (30.0, 100.0),
+        }
+
+    # Compute PSD using MNE (Welch)
+    psd, freqs = mne.time_frequency.psd_array_welch(
+        x_t,
+        sfreq=sfreq,
+        fmin=min(b[0] for b in bands.values()),
+        fmax=max(b[1] for b in bands.values()),
+        n_fft=n_fft_param,
+        verbose=False,
+    )
+
+    # plot psd
+    print(f"shape psd: {psd.shape}, shape freqs: {freqs.shape}")
+
+    psd_avg = np.mean(psd, axis=0)  # Shape: (64, 100)
+
+    # plot psd with matplotlib
+
+    fig2, ax = plt.subplots(figsize=(10, 6))
+    for ch in range(n_channels):
+        ax.plot(freqs, psd_avg[ch], label=ch_names[ch])
+    ax.set_xlabel("Frequency (Hz)")
+    ax.set_ylabel("Power Spectral Density (dB/Hz)")
+    ax.set_title("PSD of EEG Channels")
+    ax.legend(loc="upper right", fontsize="small")
+    plt.show
     return
 
 
@@ -232,7 +280,7 @@ def _(plots, rootdir):
             plt.close(fig)
 
     print(f"Saved to {pdf_path}")
-    return
+    return (plt,)
 
 
 @app.cell

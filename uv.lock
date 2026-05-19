@@ -563,6 +563,7 @@ dependencies = [
     { name = "pywavelets" },
     { name = "scikit-learn" },
     { name = "scipy" },
+    { name = "tftb" },
     { name = "torch" },
     { name = "tqdm" },
     { name = "typer" },
@@ -584,6 +585,7 @@ requires-dist = [
     { name = "pywavelets", specifier = ">=1.9.0" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "scipy", specifier = ">=1.17.1" },
+    { name = "tftb", specifier = ">=0.1.4" },
     { name = "torch", specifier = ">=2.11.0" },
     { name = "tqdm", specifier = ">=4.67.3" },
     { name = "typer", specifier = ">=0.25.1" },
@@ -2148,6 +2150,17 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/51/71/10e27d4cefa11a29c56c005f70ad5c835ba0ac8c566e1b7ffc836a7cc895/tensorstore-0.1.83-cp314-cp314t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:f48765dcfc854de17742c63c80b163c9b2bf23dcc5b9c64a56126f99a20dbcc5", size = 19365346, upload-time = "2026-05-06T16:25:39.016Z" },
     { url = "https://files.pythonhosted.org/packages/01/6b/7137aa7b959917e04b55505c009decc7f5de7207cbfbfdd16d7b56e3b844/tensorstore-0.1.83-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:af95e021aee9fd138fb67901999f91e0787a22ec32c725df7d5f3892046bf7dd", size = 20984848, upload-time = "2026-05-06T16:25:41.994Z" },
 ]
+
+[[package]]
+name = "tftb"
+version = "0.1.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/17/7d/4ea3d1d9c1b510efe0a0b3765055da080cc3185092537a92e06aaee14177/tftb-0.1.4.tar.gz", hash = "sha256:747e8080d03c12f1eb198e7337ca0eb5c9b39d6df41f437863f19b0eb10c962c", size = 402840, upload-time = "2022-08-22T05:11:51.883Z" }
 
 [[package]]
 name = "threadpoolctl"

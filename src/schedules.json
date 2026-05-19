@@ -28,5 +28,45 @@
     "models": ["random_forest", "svc", "logistic_regression", "linear_svc"],
     "features": ["bandpower_mean", "bandpower_mean_sd", "dwt_hierarchical_mean", "bandpower_mean_window"],
     "scales": ["scale", "no_scale"]
-  }
+  },
+  "7": {
+    "models": ["random_forest", "bagging_rf", "bagging_svc"],
+    "features": ["swvd_mean", "swvd_full", "bandpower_mean"],
+    "scales": ["scale"]
+  },
+    "8": {
+    "models": ["bagging_rf"],
+    "features": ["bandpower_mean"],
+    "scales": ["scale"]
+  },
+  "9": {
+    "models": ["random_forest"],
+    "features": ["swvd_band_mean", "swvd_logbins_mean"],
+    "scales": ["scale"]
+  },
+  "10": { 
+    "models": ["random_forest"],
+    "features": [
+      "mean",
+      "mean_mi",
+      "bandpower_mean",
+      "bandpower_mean_mi",
+      "dwt_stats",
+      "dwt_stats_mi"
+    ],
+    "scales": ["scale"]
+  },
+    "11": { 
+      "models": ["random_forest", "svc", "logistic_regression"],
+      "features": [
+        "stack", 
+        "mean",
+        "mean_mi",
+        "bandpower_mean",
+        "bandpower_mean_mi",
+        "dwt_stats",
+        "dwt_stats_mi"
+      ],
+      "scales": ["scale"]
+    }
 }

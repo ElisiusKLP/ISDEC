@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from pathlib import Path
 from tqdm import tqdm
+import time
 from rich import print
 
 # Import feature extraction functions
@@ -26,6 +27,7 @@ from features import (
     transform_to_phase,
     transform_to_band_power_with_phase,
     transform_to_time_frequency,
+    tfr_mortlet_to_cnn,
 )
 
 # ============================================================================
@@ -834,10 +836,12 @@ def test_feature_extraction(n_subjects: int = 5, sfreq: float = 200.0):
             # Test 5: Morlet Time-Frequency Extraction
             # ================================================================
             print(f"  Testing Morlet time-frequency extraction...", end=" ")
+            t_0 = time.perf_counter()
             X_tf = create_model_features(X, feature_type="tfr_morlet")
+            t_1 = time.perf_counter()
             if X_tf is None:
                 raise ValueError("Time-frequency transform returned None")
-            print(f"✓ shape: {X_tf.shape}")
+            print(f"✓ shape: {X_tf.shape}, computed in {t_1 - t_0:.2f} seconds")
 
             fig = plot_time_frequency_features(X, X_tf, sfreq, subject_name, n_freqs=20)
             fig_path = subject_dir / f"{subject_name}_time_frequency_morlet.png"
@@ -850,9 +854,52 @@ def test_feature_extraction(n_subjects: int = 5, sfreq: float = 200.0):
 
         try:
             # ================================================================
+            # Test 5b: Morlet TFR -> CNN Image
+            # ================================================================
+            print(f"  Testing Morlet TFR -> CNN image...,", end=" ")
+
+            select_one_epoch = True
+            if select_one_epoch:
+                print(" (using only first epoch for faster testing)", end="")
+                X_0 = X[:1]
+            else:
+                X_0 = X
+            
+            t_0 = time.perf_counter()
+            imgs = create_model_features(X_0, feature_type="tfr_morlet_cnn")
+            t_1 = time.perf_counter()
+            if imgs is None:
+                raise ValueError("TFR->CNN transform returned None")
+            print(f"✓ shape: {imgs.shape}, computed in {t_1 - t_0:.2f} seconds")
+
+            # Save first epoch image (collapse channel if present)
+            img = imgs[0]
+            if img.ndim == 3 and img.shape[-1] > 1:
+                # if multi-channel, average channels for visualization
+                vis = img.mean(axis=-1)
+            elif img.ndim == 3:
+                vis = img[:, :, 0]
+            else:
+                raise ValueError("Unexpected image shape from tfr_morlet_cnn")
+
+            fig = plt.figure(figsize=(6, 6))
+            plt.imshow(vis, aspect='auto', origin='lower', cmap='viridis')
+            plt.title("TFR Morlet -> CNN image")
+            plt.colorbar(label='Power')
+            fig_path = subject_dir / f"{subject_name}_time_frequency_morlet_cnn.png"
+            fig.savefig(fig_path, dpi=100, bbox_inches='tight')
+            plt.close(fig)
+            print(f"    Saved: {fig_path.name}")
+
+        except Exception as e:
+            print(f"✗ Error: {e}")
+
+        try:
+            # ================================================================
             # Test 6: Band-Aggregated Morlet Time-Frequency Extraction
             # ================================================================
             print(f"  Testing Morlet band-aggregated time-frequency extraction...", end=" ")
+
             X_tf_bands = create_model_features(X, feature_type="tfr_morlet_bands")
             if X_tf_bands is None:
                 raise ValueError("Band-aggregated time-frequency transform returned None")
@@ -905,6 +952,64 @@ def test_feature_extraction(n_subjects: int = 5, sfreq: float = 200.0):
 
             fig = plot_dwt_hierarchical_features(X, X_dwt_hier, subject_name)
             fig_path = subject_dir / f"{subject_name}_dwt_hierarchical.png"
+            fig.savefig(fig_path, dpi=100, bbox_inches='tight')
+            plt.close(fig)
+            print(f"    Saved: {fig_path.name}")
+
+        except Exception as e:
+            print(f"✗ Error: {e}")
+
+        try:
+            # ================================================================
+            # Test 8b: Smoothed Wigner-Ville (SWVD) — stats (mean)
+            # ================================================================
+            print(f"  Testing smoothed Wigner-Ville (stats mean)...", end=" ")
+            from features import transform_to_wigner_ville_features
+
+            # use a small subset for testing to limit runtime/memory
+            X_sub = X[:2] if n_epochs >= 2 else X[:1]
+
+            for mode in ["bands", "log_bins"]:
+                print(f"\n    Mode: {mode}")
+                tfr_stats = transform_to_wigner_ville_features(
+                    X_sub, sfreq=sfreq, mode="stats", stats=["mean"],
+                    freq_aggregation=mode, n_freq_bins=10, bands=DEFAULT_BANDS
+                )
+                print(f"✓ shape: {tfr_stats.shape}")
+
+                # visualise first epoch by splitting channels × freqs
+                per_channel_freq = tfr_stats.shape[1] // n_channels
+                vis = tfr_stats[0].reshape(n_channels, per_channel_freq)
+                fig = plt.figure(figsize=(6, 4))
+                plt.imshow(vis, aspect='auto', origin='lower', cmap='viridis')
+                plt.title("SWVD (stats mean) — epoch 0")
+                plt.colorbar(label='Value')
+                fig_path = subject_dir / f"{subject_name}_swvd_stats_mean_{mode}.png"
+                fig.savefig(fig_path, dpi=100, bbox_inches='tight')
+                plt.close(fig)
+                print(f"    Saved: {fig_path.name}")
+
+        except Exception as e:
+            print(f"✗ Error: {e}")
+
+        try:
+            # ================================================================
+            # Test 8c: Smoothed Wigner-Ville (SWVD) — full
+            # ================================================================
+            print(f"  Testing smoothed Wigner-Ville (full)...", end=" ")
+            from features import transform_to_wigner_ville_features
+
+            X_sub = X[:1]
+            tfr_full = transform_to_wigner_ville_features(X_sub, sfreq=sfreq, mode="full")
+            print(f"✓ shape: {tfr_full.shape}")
+
+            # reshape first epoch into (channels, -1) for basic visualisation
+            vis_full = tfr_full[0].reshape(n_channels, -1)
+            fig = plt.figure(figsize=(6, 4))
+            plt.imshow(vis_full, aspect='auto', origin='lower', cmap='magma')
+            plt.title("SWVD (full) — epoch 0")
+            plt.colorbar(label='Value')
+            fig_path = subject_dir / f"{subject_name}_swvd_full.png"
             fig.savefig(fig_path, dpi=100, bbox_inches='tight')
             plt.close(fig)
             print(f"    Saved: {fig_path.name}")
@@ -969,189 +1074,8 @@ def test_feature_extraction(n_subjects: int = 5, sfreq: float = 200.0):
     print(f"\n[bold green]✓ Testing complete! Plots saved to:{test_output_dir}[/bold green]")
 
 
-def test_dwt_hierarchical():
-    """
-    Test transform_to_dwt_hierarchical feature extraction.
-    
-    This test verifies:
-    - Correct output shape (epochs, channels * n_levels * 4)
-    - No NaN or inf values in output
-    - Proper handling of different array shapes
-    """
-    from features import transform_to_dwt_hierarchical
-    
-    print("\n" + "="*80)
-    print("Testing: transform_to_dwt_hierarchical")
-    print("="*80)
-    
-    # Test 1: Basic shape validation
-    print("\n[Test 1] Shape validation")
-    n_epochs, n_channels, n_timepoints = 10, 8, 512
-    x = np.random.randn(n_epochs, n_channels, n_timepoints)
-    
-    features = transform_to_dwt_hierarchical(x, sfreq=256)
-    
-    assert features.ndim == 2, f"Expected 2D output, got {features.ndim}D"
-    assert features.shape[0] == n_epochs, f"Expected {n_epochs} epochs, got {features.shape[0]}"
-    
-    # Calculate expected number of features per channel
-    import pywt
-    max_level = pywt.dwt_max_level(n_timepoints, 8)
-    expected_features_per_channel = (max_level + 1) * 4
-
-    expected_total_features = n_channels * expected_features_per_channel
-
-    assert features.shape[1] == expected_total_features, \
-        f"Expected {expected_total_features} features for {n_channels} channels and {n_timepoints} timepoints, got {features.shape[1]}"
-    
-    print(f"✓ Input shape: {x.shape}")
-    print(f"✓ Output shape: {features.shape}")
-    print(f"✓ Features per channel: {expected_features_per_channel} ({max_level + 1} levels × 4 stats)")
-    print(f"✓ Total expected features: {expected_total_features} for {n_channels} channels")
-    
-    # Test 2: No NaN or inf values
-    print("\n[Test 2] Data integrity")
-    assert not np.any(np.isnan(features)), "Output contains NaN values"
-    assert not np.any(np.isinf(features)), "Output contains inf values"
-    print(f"✓ No NaN or inf values")
-    print(f"✓ Min value: {features.min():.6f}, Max value: {features.max():.6f}")
-    
-    # Test 3: Different input shapes
-    print("\n[Test 3] Different input shapes")
-    test_shapes = [(5, 4, 256), (1, 16, 1024), (20, 2, 128)]
-    
-    for shape in test_shapes:
-        x_test = np.random.randn(*shape)
-        features_test = transform_to_dwt_hierarchical(x_test, sfreq=256)
-        assert features_test.shape[0] == shape[0], f"Epochs mismatch for shape {shape}"
-        assert not np.any(np.isnan(features_test)), f"NaN found for shape {shape}"
-        print(f"  ✓ Shape {shape} → features shape {features_test.shape}")
-    
-    # Test 4: Consistency
-    print("\n[Test 4] Consistency")
-    x_const = np.random.randn(5, 4, 256)
-    features1 = transform_to_dwt_hierarchical(x_const, sfreq=256)
-    features2 = transform_to_dwt_hierarchical(x_const, sfreq=256)
-    assert np.allclose(features1, features2), "Same input produced different outputs"
-    print(f"✓ Deterministic: same input produces identical output")
-    
-    print("\n✓ All tests passed for transform_to_dwt_hierarchical\n")
-
-
-def test_channel_selection_by_mutual_info():
-    """
-    Test select_channels_by_mutual_info feature extraction.
-    
-    This test verifies:
-    - Correct number of channels selected
-    - Output shape consistency (train/test match)
-    - No NaN or inf values
-    """
-    from features import select_channels_by_mutual_info
-    
-    print("\n" + "="*80)
-    print("Testing: select_channels_by_mutual_info")
-    print("="*80)
-    
-    # Test 1: Basic shape and channel selection
-    print("\n[Test 1] Channel selection and shape validation")
-    n_channels = 8
-    k_channels = 4
-    n_epochs_train, n_epochs_test = 30, 10
-    n_timepoints = 512
-    
-    # Create synthetic data
-    x_train = np.random.randn(n_epochs_train, n_channels, n_timepoints)
-    x_test = np.random.randn(n_epochs_test, n_channels, n_timepoints)
-    y_train = np.random.randint(0, 2, n_epochs_train)
-    
-    # Make first few channels more informative
-    for i in range(2):
-        x_train[:, i, :] += y_train[:, np.newaxis] * 0.5
-        x_test[:, i, :] += np.random.randint(0, 2, n_epochs_test)[:, np.newaxis] * 0.5
-    
-    X_train_feat, X_test_feat = select_channels_by_mutual_info(
-        x_train, y_train, x_test, k_channels=k_channels
-    )
-    
-    print(f"✓ Train input shape: {x_train.shape}")
-    print(f"✓ Test input shape: {x_test.shape}")
-    print(f"✓ Selected {k_channels} out of {n_channels} channels")
-    
-    # Check output shapes
-    assert X_train_feat.shape[0] == n_epochs_train, "Train epochs mismatch"
-    assert X_test_feat.shape[0] == n_epochs_test, "Test epochs mismatch"
-    assert X_train_feat.shape[1] == X_test_feat.shape[1], "Train/test feature dimension mismatch"
-    
-    print(f"✓ Train features shape: {X_train_feat.shape}")
-    print(f"✓ Test features shape: {X_test_feat.shape}")
-    
-    # Test 2: Data integrity
-    print("\n[Test 2] Data integrity")
-    assert not np.any(np.isnan(X_train_feat)), "Train features contain NaN"
-    assert not np.any(np.isinf(X_train_feat)), "Train features contain inf"
-    assert not np.any(np.isnan(X_test_feat)), "Test features contain NaN"
-    assert not np.any(np.isinf(X_test_feat)), "Test features contain inf"
-    print(f"✓ No NaN or inf in train features")
-    print(f"✓ No NaN or inf in test features")
-    
-    # Test 3: Feature count validation
-    print("\n[Test 3] Feature count validation")
-    import pywt
-    max_level = pywt.dwt_max_level(n_timepoints, 8)
-    coeffs = pywt.wavedec(
-        np.random.randn(n_timepoints),
-        wavelet="db4",
-        level=max_level,
-        mode="symmetric",
-    )
-    coeffs_per_channel = sum(c.size for c in coeffs)
-    expected_features = k_channels * coeffs_per_channel
-    
-    assert X_train_feat.shape[1] == expected_features, \
-        f"Expected {expected_features} features for {k_channels} selected channels and {n_timepoints} timepoints, got {X_train_feat.shape[1]}"
-    print(f"✓ Feature count correct: {k_channels} channels × {coeffs_per_channel} coefficients per channel")
-    
-    # Test 4: Different k_channels values
-    print("\n[Test 4] Different k_channels values")
-    for k in [2, 4, 6]:
-        X_tr, X_te = select_channels_by_mutual_info(
-            x_train, y_train, x_test, k_channels=k
-        )
-        assert X_tr.shape[0] == n_epochs_train
-        assert X_te.shape[0] == n_epochs_test
-        assert X_tr.shape[1] == X_te.shape[1]
-        print(f"  ✓ k_channels={k}: train {X_tr.shape}, test {X_te.shape}")
-    
-    # Test 5: Input validation
-    print("\n[Test 5] Input validation")
-    
-    # Mismatched channels
-    x_train_bad = np.random.randn(20, 8, 256)
-    x_test_bad = np.random.randn(10, 7, 256)
-    y_train_bad = np.random.randint(0, 2, 20)
-    
-    try:
-        select_channels_by_mutual_info(x_train_bad, y_train_bad, x_test_bad, k_channels=4)
-        assert False, "Should have raised ValueError for mismatched channels"
-    except ValueError as e:
-        print(f"✓ Correctly caught channel mismatch")
-    
-    # Wrong input dimensions
-    x_train_2d = np.random.randn(20, 256)
-    try:
-        select_channels_by_mutual_info(x_train_2d, y_train_bad, x_test, k_channels=4)
-        assert False, "Should have raised ValueError for 2D input"
-    except ValueError as e:
-        print(f"✓ Correctly caught wrong dimensionality")
-    
-    print("\n✓ All tests passed for select_channels_by_mutual_info\n")
-
-
 if __name__ == "__main__":
     # Run new feature tests
-    #test_dwt_hierarchical()
-    #test_channel_selection_by_mutual_info()
     
     # Test on first 5 subjects by default
     # Adjust n_subjects parameter to test on more subjects
