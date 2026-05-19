@@ -9,6 +9,7 @@ from sklearn.model_selection import ParameterGrid
 
 from classification import FEATURE_CHOICES, MODEL_CHOICES, fit_model, get_model_strategy, train_dir, val_dir
 from summarise_results import summarise_results
+from schedule_config import config as param_config
 
 # Default schedules file (relative to this module)
 SCHEDULES_PATH = Path(__file__).resolve().parent / "schedules.json"
@@ -130,16 +131,12 @@ def main(
 	feature = override_choices(RUN_FEATURE_CHOICES, list(FEATURE_CHOICES))
 	scale_state = override_choices(RUN_SCALE_CHOICES, ["scale", "no_scale"])
 
-	config_path = Path("src/schedule_config.json").resolve()
-	with open(config_path, "r") as f:
-		config = json.load(f)
-
 	runs = list(product(model, feature, scale_state))
 	# Build task list (model, feature, scale, variant, run_idx, total_runs, config_idx, total_configs)
 	tasks: list[tuple] = []
 	for run_idx, (model_name, feature_name, state) in enumerate(runs, start=1):
 		scale = state == "scale"
-		model_config = config.get(model_name)
+		model_config = param_config.get(model_name)
 		if use_config_grid and model_config:
 			grid = list(ParameterGrid(model_config))
 			print(f"Using configuration grid for {model_name}: {model_config}")

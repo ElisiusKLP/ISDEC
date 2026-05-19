@@ -1,3 +1,5 @@
+from jax.random import gamma
+from mpmath.functions.rszeta import coef
 from docutils.utils.math.mathml_elements import mi
 from etils.etree import stack
 from jax.lax import ne
@@ -131,6 +133,11 @@ class RandomForestStrategy(ModelStrategy):
         self.n_estimators = self.config.get("n_estimators", 300)
         self.max_features = self.config.get("max_features", None)
         self.random_state = self.config.get("random_state", 2001)
+        self.criterion = self.config.get("criterion", "gini")
+        self.max_depth = self.config.get("max_depth", None)
+        self.min_samples_split = self.config.get("min_samples_split", 2)
+        self.min_samples_leaf = self.config.get("min_samples_leaf", 1)
+        self.max_features = self.config.get("max_features", None)
         self.scale = scale
         self.feature_type = feature_type
         self._x_train_raw = None
@@ -159,6 +166,10 @@ class RandomForestStrategy(ModelStrategy):
                     n_estimators=self.n_estimators,
                     max_features=self.max_features,
                     random_state=self.random_state,
+                    criterion=self.criterion,
+                    max_depth=self.max_depth,
+                    min_samples_split=self.min_samples_split,
+                    min_samples_leaf=self.min_samples_leaf,
                 ),
             )
         )
@@ -179,6 +190,9 @@ class LogisticRegressionStrategy(ModelStrategy):
         self.solver = self.config.get("solver", "saga")
         self.max_iter = self.config.get("max_iter", 10000)
         self.l1_ratio = self.config.get("l1_ratio", 1)
+        self.tol = self.config.get("tol", 1e-4)
+        self.penalty = self.config.get("penalty", "l1")
+        self.C = self.config.get("C", 1.0)
         self.scale = scale
         self.feature_type = feature_type
         self._x_train_raw = None
@@ -206,7 +220,11 @@ class LogisticRegressionStrategy(ModelStrategy):
                 LogisticRegression(
                     solver=self.solver, 
                     max_iter=self.max_iter,
-                    l1_ratio=self.l1_ratio
+                    l1_ratio=self.l1_ratio,
+                    tol=self.tol,
+                    penalty=self.penalty,
+                    C=self.C,
+                    random_state=2001
                 ),
             )
         )
@@ -228,6 +246,9 @@ class SVCStrategy(ModelStrategy):
         self.scale = scale
         self.feature_type = feature_type
         self.random_state = self.config.get("random_state", 2072)
+        self.degree = self.config.get("degree", 3)
+        self.coef0 = self.config.get("coef0", 0.0)
+        self.gamma = self.config.get("gamma", "scale")
         self._x_train_raw = None
         self._y_train = None
         self._x_val_raw = None
@@ -252,7 +273,14 @@ class SVCStrategy(ModelStrategy):
         steps.append(
             (
                 "classifier",
-                SVC(kernel=self.kernel, C=self.C, random_state=self.random_state),
+                SVC(
+                    kernel=self.kernel,
+                    C=self.C, 
+                    random_state=self.random_state,
+                    degree=self.degree,
+                    coef0=self.coef0,
+                    gamma=self.gamma
+                    ),
             )
         )
         return Pipeline(steps=steps)
