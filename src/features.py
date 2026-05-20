@@ -1035,14 +1035,16 @@ def transform_to_dwt_level_stats(
 
     # combine stats in order [mean, std, entropy] per level
     stats_array = [means, stds]
+    stats_array = [means, stds]
     stats_per_level = np.stack(
         stats_array, axis=-1
-    )  # (epochs, channels, levels, 3)
+    )  # (epochs, channels, levels, n_stats)
 
     # Flatten for ML: (epochs, n_features)
     features_2d = stats_per_level.reshape(n_epochs, -1)
 
     # flatten to 3d for CNNs: (epochs, channels, levels*stats)
+    features3d = stats_per_level.reshape(n_epochs, n_channels, n_levels * len(stats_array))
     features3d = stats_per_level.reshape(n_epochs, n_channels, n_levels * len(stats_array))
 
     return stats_per_level, features3d, features_2d

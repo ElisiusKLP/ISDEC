@@ -77,7 +77,9 @@ def get_color_map(items):
         for i, item in enumerate(items)
     }
 
-def apply_theme(fig, title="", xaxis_title="", yaxis_title="", legend_title="", width=1200, height=600):
+def apply_theme(fig, title="", xaxis_title="", yaxis_title="", legend_title="", width=1200, height=600,
+        add_hline=True
+        ):
     """Apply minimal theme with consistent styling across all plots."""
     fig.update_layout(
         template="plotly_white",  # minimal template
@@ -93,7 +95,7 @@ def apply_theme(fig, title="", xaxis_title="", yaxis_title="", legend_title="", 
             title=legend_title,
             bgcolor="rgba(255, 255, 255, 0.8)",
             bordercolor="#CCCCCC",
-            borderwidth=1,
+            borderwidth=0,
         ),
         width=width,
         height=height,
@@ -126,12 +128,63 @@ def apply_theme(fig, title="", xaxis_title="", yaxis_title="", legend_title="", 
         ),
         selector=dict(mode="markers"),
     )
+
+    if add_hline:
+        fig.add_hline(
+            y=0.2,
+            line_dash="dash",
+            line_color="gray",
+            line_width=1,
+        )
     
     return fig
 
 ###
 # PLOTLY PLOTS
 ###
+# Model name to label mapping
+MODEL_LABEL_MAP = {
+    "logistic_regression": "Logistic Regression",
+    "random_forest": "Random Forest",
+    "svc": "SVM"
+}
+
+# Feature type to display label mapping
+FEATURE_LABEL_MAP = {
+    "stack": "Stacked",
+    "mean": "Mean",
+    "mean_mi": "Mean (MI)",
+    "bandpower_mean": "Bandpower Mean",
+    "bandpower_mean_mi": "Bandpower Mean (MI)",
+    "dwt_stats": "DWT Stats",
+    "dwt_stats_mi": "DWT Stats (MI)"
+}
+
+def remap_labels(df):
+    # Store originals
+    new_df = df.copy()
+    original_model_names = new_df["model_name"].copy()
+    original_feature_types = new_df["feature_type"].copy()
+
+    # Apply mapping
+    new_df["model_name"] = new_df["model_name"].map(MODEL_LABEL_MAP)
+    new_df["feature_type"] = new_df["feature_type"].map(FEATURE_LABEL_MAP)
+
+    # Detect unmapped model names
+    missing_models = original_model_names[new_df["model_name"].isna()].unique()
+    if len(missing_models) > 0:
+        print("Unmapped model_name values:")
+        for val in missing_models:
+            print(f"  - {repr(val)}")
+
+    # Detect unmapped feature types
+    missing_features = original_feature_types[new_df["feature_type"].isna()].unique()
+    if len(missing_features) > 0:
+        print("Unmapped feature_type values:")
+        for val in missing_features:
+            print(f"  - {repr(val)}")
+
+    return new_df
 
 def plot_all_models_average_score(summary_df: pd.DataFrame,
 output_dir: Path):
@@ -165,10 +218,10 @@ output_dir: Path):
 
     fig = apply_theme(
         fig,
-        title="Model Performance by Feature Type",
+        title="Model Performance by Feature Extraction",
         xaxis_title="Model Name",
-        yaxis_title="Score",
-        legend_title="Feature Type",
+        yaxis_title="Mean Accuracy",
+        legend_title="Feature Extraction",
     )
     fig.update_xaxes(tickangle=45)
 
@@ -252,9 +305,10 @@ def plot_top_fit_per_feature(summary_df: pd.DataFrame, output_dir: Path):
         .groupby(["feature_type", "model_name"], as_index=False)
         .first()
     )
+    top_fit_df = remap_labels(top_fit_df)
 
-    feature_types = list(sorted(top_fit_df["feature_type"].unique()))
-    models = list(sorted(top_fit_df["model_name"].unique()))
+    feature_types = list(FEATURE_LABEL_MAP.values())
+    models = list(MODEL_LABEL_MAP.values())
 
     group_spacing = 2.0
     model_spacing = 0.25
@@ -291,24 +345,24 @@ def plot_top_fit_per_feature(summary_df: pd.DataFrame, output_dir: Path):
             "score": ":.4f",
             "score_std": ":.4f",
             "x_pos": False,
+            "config": True
         },
         color_discrete_map=model_color_map,
     )
 
     fig = apply_theme(
         fig,
-        title="Top Model Performance by Feature Type",
-        xaxis_title="Feature Type",
+        title="Top Model Performance by Feature Extraction",
+        xaxis_title="Feature Extraction",
         yaxis_title="Mean Accuracy",
-        legend_title="Model",
-        width=900,
-        height=600,
+        legend_title="Model"
     )
     
     fig.update_layout(
         xaxis=dict(
             tickvals=[feature_centers[ft] for ft in feature_types],
             ticktext=feature_types,
+            tickangle=0
         ),
         yaxis=dict(
         range=[0, 1]  # Replace y_min and y_max with your desired values
@@ -336,7 +390,9 @@ def plot_mean_sd_plot(summary_df_aggregated: pd.DataFrame, output_dir: Path):
     plot_df["is_scaled"] = plot_df["scale"].map(_is_scaled)
     plot_df = plot_df[plot_df["is_scaled"] == True]
 
-    model_names = sorted(plot_df["model_name"].unique())
+    plot_df = remap_labels(plot_df)
+
+    model_names = list(MODEL_LABEL_MAP.values())
     model_color_map = get_color_map(model_names)
 
     fig = px.scatter(
@@ -344,16 +400,16 @@ def plot_mean_sd_plot(summary_df_aggregated: pd.DataFrame, output_dir: Path):
         x="score_std",
         y="score",
         color="model_name",
-        hover_data={"feature_type": True, "scale": True, "model_name": True, "score": ":.4f", "score_std": ":.4f"},
+        hover_data={"feature_type": True, "scale": True, "model_name": True, "score": ":.4f", "score_std": ":.4f", "config": True},
         color_discrete_map=model_color_map,
     )
 
     fig = apply_theme(
         fig,
         title="Model Performance: Mean vs Standard Deviation",
-        xaxis_title="Score Std Dev",
-        yaxis_title="Mean Score",
-        legend_title="Model Name",
+        xaxis_title="Accuracy SD",
+        yaxis_title="Mean Accuracy",
+        legend_title="Model",
     )
 
     plot_path = output_dir / "model_performance_mean_sd_by_feature_type.html"
@@ -362,11 +418,13 @@ def plot_mean_sd_plot(summary_df_aggregated: pd.DataFrame, output_dir: Path):
 
 def plot_violin_per_feature(summary_df: pd.DataFrame, output_dir: Path):
     """Plot violin plot of scores for each feature type."""
-    feature_types = sorted(summary_df["feature_type"].unique())
+    plot_df = remap_labels(summary_df)
+
+    feature_types = list(FEATURE_LABEL_MAP.values())
     color_map = get_color_map(feature_types)
 
     fig = px.violin(
-        summary_df,
+        plot_df,
         x="feature_type",
         y="score",
         color="feature_type",
@@ -376,12 +434,12 @@ def plot_violin_per_feature(summary_df: pd.DataFrame, output_dir: Path):
 
     fig = apply_theme(
         fig,
-        title="Score Distribution by Feature Type",
-        xaxis_title="Feature Type",
-        yaxis_title="Score",
-        legend_title="Feature Type",
+        title="Accuracy Distribution by Feature Extraction",
+        xaxis_title="Feature Extraction",
+        yaxis_title="Accuracy",
+        legend_title="Feature Extraction",
     )
-    fig.update_xaxes(tickangle=45)
+    fig.update_xaxes(tickangle=0)
 
     plot_path = output_dir / "score_distribution_by_feature_type.html"
     fig.write_html(plot_path)
@@ -389,11 +447,16 @@ def plot_violin_per_feature(summary_df: pd.DataFrame, output_dir: Path):
 
 def plot_violin_per_model(summary_df: pd.DataFrame, output_dir: Path):
     """Plot violin plot of scores for each model."""
-    model_names = sorted(summary_df["model_name"].unique())
+    print(summary_df["model_name"].unique())
+    print(summary_df["feature_type"].unique())
+    plot_df = remap_labels(summary_df)
+    model_names = list(MODEL_LABEL_MAP.values())
+    print(f"model_names: {model_names}")
+    print(plot_df.head(2))
     color_map = get_color_map(model_names)
 
     fig = px.violin(
-        summary_df,
+        plot_df,
         x="model_name",
         y="score",
         color="model_name",
@@ -403,12 +466,12 @@ def plot_violin_per_model(summary_df: pd.DataFrame, output_dir: Path):
 
     fig = apply_theme(
         fig,
-        title="Score Distribution by Model",
-        xaxis_title="Model Name",
-        yaxis_title="Score",
-        legend_title="Model Name",
+        title="Accuracy Distribution by Model",
+        xaxis_title="Model",
+        yaxis_title="Accuracy",
+        legend_title="Model",
     )
-    fig.update_xaxes(tickangle=45)
+    fig.update_xaxes(tickangle=0)
 
     plot_path = output_dir / "score_distribution_by_model.html"
     fig.write_html(plot_path)
@@ -495,7 +558,7 @@ def plot_violin_per_model_with_feature_scatter(summary_df: pd.DataFrame, output_
                     "Model: %{customdata[0]}<br>"
                     "Feature: " + feature_type + "<br>"
                     "Scale: %{customdata[1]}<br>"
-                    "Score: %{customdata[2]:.4f}<extra></extra>"
+                    "Score: %{customdata[3]:.4f}<extra></extra>"
                 ),
             )
         )
@@ -653,8 +716,11 @@ def plot_mean_accuracy_per_feature(summary_df: pd.DataFrame, output_dir: Path, m
 
     # Filter the DataFrame for the specified model name
     model_df = summary_df[summary_df["model_name"] == model_name]
+    model_df = remap_labels(model_df)
 
-    model_color_map = get_color_map(sorted(model_df["feature_type"].unique()))
+    model_color_map = get_color_map(FEATURE_LABEL_MAP.values())
+
+    model_name_label = MODEL_LABEL_MAP[model_name]
 
     fig_type = "box"
     if fig_type == "box":
@@ -685,15 +751,15 @@ def plot_mean_accuracy_per_feature(summary_df: pd.DataFrame, output_dir: Path, m
 
     fig = apply_theme(
         fig,
-        title="Top Model Performance by Feature Type",
-        xaxis_title="Feature Type",
-        yaxis_title="Score",
-        legend_title="Model Name",
+        title=f"{model_name_label} Performance by Feature Extraction",
+        xaxis_title="Feature Extraction",
+        yaxis_title="Accuracy",
+        legend_title="Model",
         width=900,
         height=600,
     )
 
-    fig.update_yaxes(range=[0, 1])  # Set y-axis range to [0, 1] for accuracy
+    fig.update_yaxes(range=[0, .5])  # Set y-axis range to [0, 1] for accuracy
 
     plot_path = output_dir / f"top_model_performance_by_feature_type_model-{model_name}.html"
     fig.write_html(plot_path)

@@ -67,5 +67,12 @@
         "dwt_stats_mi"
       ],
       "scales": ["scale"]
+    },
+    "12": { 
+      "models": ["random_forest", "svc", "logistic_regression"],
+      "features": [
+        "stack"
+      ],
+      "scales": ["scale"]
     }
 }

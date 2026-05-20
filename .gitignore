@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 *.pyo
 *.DS_Store
+*.log
+*temp.bash
 
 # Ignore virtual environment or dependency caches
 .venv/
@@ -16,3 +18,4 @@ results_old/
 
 # files
 notes.md
+gitconfig.sh

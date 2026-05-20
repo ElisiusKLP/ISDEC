@@ -178,7 +178,7 @@ def fit_model(
     result_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    # Check if this configuration has already been run
+    # Check if this configuration has already been run (only skip if exactly 15 files exist)
     existing_results = list(result_dir.glob("*.joblib"))
     n_subjects = 15
     if len(existing_results) == 15:
