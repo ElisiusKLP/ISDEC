@@ -1,3 +1,4 @@
+from matplotlib.pylab import plot
 from pyexpat import model
 from pathlib import Path
 import matplotlib.pyplot as plt
@@ -87,7 +88,7 @@ def apply_theme(fig, title="", xaxis_title="", yaxis_title="", legend_title="", 
             text=title,
             x=0.5,
             xanchor="center",
-            font=dict(size=16, color="#333333"),
+            font=dict(size=20, color="#333333"),
         ),
         xaxis_title=xaxis_title,
         yaxis_title=yaxis_title,
@@ -101,7 +102,7 @@ def apply_theme(fig, title="", xaxis_title="", yaxis_title="", legend_title="", 
         height=height,
         plot_bgcolor="white",
         paper_bgcolor="white",
-        font=dict(family="Times New Roman", size=12, color="#333333"),
+        font=dict(family="Times New Roman", size=14, color="#333333"),
         hovermode="closest",
     )
     
@@ -138,6 +139,22 @@ def apply_theme(fig, title="", xaxis_title="", yaxis_title="", legend_title="", 
         )
     
     return fig
+
+def save_to_png(
+    fig, output_dir: Path, plotname: str
+):
+    plot_path = output_dir / "png" / f"{plotname}.png"
+    plot_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.write_image(plot_path)
+    print(f"Saved model performance plot to {plot_path.resolve()}")
+
+def save_to_html(
+    fig, output_dir: Path, plotname: str
+):
+    plot_path = output_dir / "html" / f"{plotname}.html"
+    plot_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.write_html(plot_path)
+    print(f"Saved model performance plot to {plot_path.resolve()}")
 
 ###
 # PLOTLY PLOTS
@@ -225,10 +242,9 @@ output_dir: Path):
     )
     fig.update_xaxes(tickangle=45)
 
-    plot_path = output_dir / "model_performance_by_feature_type.html"
-    fig.write_html(plot_path)
-    print(f"Saved model performance plot to {plot_path.resolve()}")
-
+    plotname = "model_performance_by_feature_type"
+    save_to_html(fig, output_dir, plotname)
+    save_to_png(fig, output_dir, plotname)
 
 def plot_within_model_comparison(summary_df: pd.DataFrame, output_dir: Path):
     """Plot grid-based hyperparameter results with config information."""
@@ -288,10 +304,10 @@ def plot_within_model_comparison(summary_df: pd.DataFrame, output_dir: Path):
     )
     fig.update_xaxes(tickangle=45)
     
-    plot_path = output_dir / "model_performance_by_config_grid.html"
-    fig.write_html(plot_path)
-    print(f"Saved grid hyperparameter plot to {plot_path.resolve()}")
-    
+    plotname = "model_performance_by_config_grid"
+    save_to_html(fig, output_dir, plotname)
+    save_to_png(fig, output_dir, plotname)
+
     grid_csv_path = output_dir / "classification_summary_grid.csv"
     grouped_df.to_csv(grid_csv_path, index=False)
     print(f"Saved grid results summary to {grid_csv_path.resolve()}")
@@ -355,7 +371,8 @@ def plot_top_fit_per_feature(summary_df: pd.DataFrame, output_dir: Path):
         title="Top Model Performance by Feature Extraction",
         xaxis_title="Feature Extraction",
         yaxis_title="Mean Accuracy",
-        legend_title="Model"
+        legend_title="Model",
+        height=500
     )
     
     fig.update_layout(
@@ -369,9 +386,9 @@ def plot_top_fit_per_feature(summary_df: pd.DataFrame, output_dir: Path):
         )
     )
 
-    plot_path = output_dir / "top_model_performance_by_feature_type.html"
-    fig.write_html(plot_path)
-    print(f"Saved plot to {plot_path.resolve()}")
+    plotname = "top_model_performance_by_feature_type"
+    save_to_html(fig, output_dir, plotname)
+    save_to_png(fig, output_dir, plotname)
 
 
 def plot_mean_sd_plot(summary_df_aggregated: pd.DataFrame, output_dir: Path):
@@ -411,10 +428,12 @@ def plot_mean_sd_plot(summary_df_aggregated: pd.DataFrame, output_dir: Path):
         yaxis_title="Mean Accuracy",
         legend_title="Model",
     )
+    fig.update_xaxes(range=[0, 0.15])  # Set x-axis range to [0, 0.1] for std deviation
+    fig.update_yaxes(range=[0, 0.5])  # Set y-axis range to [0, 1] for accuracy
 
-    plot_path = output_dir / "model_performance_mean_sd_by_feature_type.html"
-    fig.write_html(plot_path)
-    print(f"Saved mean vs sd performance plot to {plot_path.resolve()}")
+    plotname = "model_performance_mean_sd_by_feature_type"
+    save_to_html(fig, output_dir, plotname)
+    save_to_png(fig, output_dir, plotname)
 
 def plot_violin_per_feature(summary_df: pd.DataFrame, output_dir: Path):
     """Plot violin plot of scores for each feature type."""
@@ -440,10 +459,12 @@ def plot_violin_per_feature(summary_df: pd.DataFrame, output_dir: Path):
         legend_title="Feature Extraction",
     )
     fig.update_xaxes(tickangle=0)
+    fig.update_yaxes(range=[0, 0.5])  # Set y-axis range to [0, 1] for accuracy
 
-    plot_path = output_dir / "score_distribution_by_feature_type.html"
-    fig.write_html(plot_path)
-    print(f"Saved violin plot to {plot_path.resolve()}")
+    plotname = "score_distribution_by_feature_type"
+    save_to_html(fig, output_dir, plotname)
+    save_to_png(fig, output_dir, plotname)
+
 
 def plot_violin_per_model(summary_df: pd.DataFrame, output_dir: Path):
     """Plot violin plot of scores for each model."""
@@ -472,10 +493,11 @@ def plot_violin_per_model(summary_df: pd.DataFrame, output_dir: Path):
         legend_title="Model",
     )
     fig.update_xaxes(tickangle=0)
+    fig.update_yaxes(range=[0, 0.5])  # Set y-axis range to [0, 1] for accuracy
 
-    plot_path = output_dir / "score_distribution_by_model.html"
-    fig.write_html(plot_path)
-    print(f"Saved violin plot to {plot_path.resolve()}")
+    plotname = "score_distribution_by_model"
+    save_to_html(fig, output_dir, plotname)
+    save_to_png(fig, output_dir, plotname)
 
 def plot_violin_per_model_and_feature(summary_df: pd.DataFrame, output_dir: Path):
     """Plot violin plot of scores for each model and feature type."""
@@ -497,9 +519,9 @@ def plot_violin_per_model_and_feature(summary_df: pd.DataFrame, output_dir: Path
     )
     fig.update_xaxes(tickangle=45)
 
-    plot_path = output_dir / "score_distribution_by_model_and_feature.html"
-    fig.write_html(plot_path)
-    print(f"Saved violin plot to {plot_path.resolve()}")
+    plotname= "score_distribution_by_model_and_feature"
+    save_to_html(fig, output_dir, plotname)
+    save_to_png(fig, output_dir, plotname)
 
 def plot_violin_per_model_with_feature_scatter(summary_df: pd.DataFrame, output_dir: Path):
     """Plot violin plot of scores for each model with scatter points colored by feature type."""
@@ -620,9 +642,9 @@ def plot_violin_per_model_with_feature_scatter(summary_df: pd.DataFrame, output_
     )
     fig.update_traces(orientation="v")
 
-    plot_path = output_dir / "score_distribution_by_model_with_feature_scatter.html"
-    fig.write_html(plot_path)
-    print(f"Saved violin plot with scatter to {plot_path.resolve()}")
+    plotname = "score_distribution_by_model_with_feature_scatter"
+    save_to_html(fig, output_dir, plotname)
+    save_to_png(fig, output_dir, plotname)
 
 def plot_violin_per_model_with_feature_error_bars(summary_df: pd.DataFrame, output_dir: Path):
     """Plot violin plot of scores for each model with error bars for each feature type."""
@@ -707,9 +729,9 @@ def plot_violin_per_model_with_feature_error_bars(summary_df: pd.DataFrame, outp
         )
         fig.update_traces(orientation="v")
 
-    plot_path = output_dir / "score_distribution_by_model_with_feature_error_bars.html"
-    fig.write_html(plot_path)
-    print(f"Saved violin plot with error bars to {plot_path.resolve()}")
+    plotname = "score_distribution_by_model_with_feature_error_bars"
+    save_to_html(fig, output_dir, plotname)
+    save_to_png(fig, output_dir, plotname)
 
 def plot_mean_accuracy_per_feature(summary_df: pd.DataFrame, output_dir: Path, model_name: str):
     """Plot boxplot chart of mean accuracy for each feature type."""
@@ -754,13 +776,11 @@ def plot_mean_accuracy_per_feature(summary_df: pd.DataFrame, output_dir: Path, m
         title=f"{model_name_label} Performance by Feature Extraction",
         xaxis_title="Feature Extraction",
         yaxis_title="Accuracy",
-        legend_title="Model",
-        width=900,
-        height=600,
+        legend_title="Model"
     )
 
-    fig.update_yaxes(range=[0, .5])  # Set y-axis range to [0, 1] for accuracy
+    fig.update_yaxes(range=[0.15, 0.45])  # Set y-axis range to [0, 1] for accuracy
 
-    plot_path = output_dir / f"top_model_performance_by_feature_type_model-{model_name}.html"
-    fig.write_html(plot_path)
-    print(f"Saved plot to {plot_path.resolve()}")
+    plotname = f"top_model_performance_by_feature_type_model-{model_name}"
+    save_to_html(fig, output_dir, plotname)
+    save_to_png(fig, output_dir, plotname)
