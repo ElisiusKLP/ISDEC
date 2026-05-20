@@ -345,6 +345,7 @@ def plot_top_fit_per_feature(summary_df: pd.DataFrame, output_dir: Path):
             "score": ":.4f",
             "score_std": ":.4f",
             "x_pos": False,
+            "config": True
         },
         color_discrete_map=model_color_map,
     )

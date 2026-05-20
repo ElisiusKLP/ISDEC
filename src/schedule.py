@@ -152,6 +152,16 @@ def main(
 
 		total_configs = len(grid)
 		for config_idx, variant in enumerate(grid, start=1):
+
+			# Skip infeasible random_forest + stack combinations
+			skip_infeasable = True
+			if skip_infeasable:
+				if (model_name == "random_forest" and feature_name == "stack"):
+					if (variant.get("max_features") is None):
+					
+						print(f"Skipping infeasible config for random_forest+stack: {variant}")
+						continue
+
 			tasks.append((model_name, feature_name, scale, variant, run_idx, len(runs), config_idx, total_configs, n_jobs))
 
 	total_tasks = len(tasks)
