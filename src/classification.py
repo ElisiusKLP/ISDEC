@@ -178,10 +178,11 @@ def fit_model(
     result_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    # Check if this configuration has already been run
+    # Check if this configuration has already been run (only skip if exactly 15 files exist)
     existing_results = list(result_dir.glob("*.joblib"))
-    if existing_results:
-        print(f"[yellow]WARNING[/yellow]: Results for this configuration already exist at {result_dir.resolve()}")
+    n_subjects = 15
+    if len(existing_results) == 15:
+        print(f"[yellow]WARNING[/yellow]: {len(existing_results)} files existing in {result_dir.resolve()}")
         print(f"[yellow]SKIPPING[/yellow]: To rerun, delete: {base_dir.resolve()}")
         return
 
