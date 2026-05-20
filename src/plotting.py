@@ -299,8 +299,8 @@ def plot_top_fit_per_feature(summary_df: pd.DataFrame, output_dir: Path):
         fig,
         title="Top Model Performance by Feature Type",
         xaxis_title="Feature Type",
-        yaxis_title="Score",
-        legend_title="Model Name",
+        yaxis_title="Mean Accuracy",
+        legend_title="Model",
         width=900,
         height=600,
     )
