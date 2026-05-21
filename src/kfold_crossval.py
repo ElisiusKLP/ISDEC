@@ -1,17 +1,18 @@
-from jax.random import f
-from numpy.f2py.rules import k
-from pyexpat import model
-
+from matplotlib.pylab import sca
 import models
 import numpy as np
 import sklearn
 import joblib
 import typer
+import re
+import time
+from typing import cast
 from rich import print
 from pathlib import Path
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from tqdm import tqdm
+
 
 from classification import MODEL_REGISTRY, get_model_strategy
 
@@ -50,19 +51,26 @@ def run_kfold_on_subset_data(model, X, y, n_splits=5):
         X_train, y_train = X[train_index], y[train_index]
         X_test, y_test = X[test_index], y[test_index]
 
+        t0 = time.perf_counter()
         model.fit(X_train, y_train)
+        train_time = time.perf_counter() - t0
 
+        t0 = time.perf_counter()
         y_preds = model.predict(X_test)
+        pred_time = time.perf_counter() - t0
 
         score = accuracy_score(y_test, y_preds)
         print(f"   Accuracy: {score:.4f}")
+        print(f"   Training time: {train_time:.4f} seconds")
         scores.append(
             {
                 "fold": i+1,
                 "accuracy": score,
                 "precision": precision_score(y_test, y_preds, average="weighted", zero_division=0),
                 "recall": recall_score(y_test, y_preds, average="weighted", zero_division=0),
-                "f1": f1_score(y_test, y_preds, average="weighted", zero_division=0)
+                "f1": f1_score(y_test, y_preds, average="weighted", zero_division=0),
+                "train_time": train_time,
+                "pred_time": pred_time
             }
         )
 
@@ -93,6 +101,12 @@ def fit_models(
     def _process_subject(file_path: Path, model_strategy: models.ModelStrategy):
         # load model
         model = model_strategy.create_model()
+        # grab some info labels
+        match = re.search(r"preprocessed_sub-(\d{2}).joblib", file_path.name)
+        sub_id = match.group(1) if match else file_path.stem
+        scale_bool = getattr(model_strategy, "scale", None)
+        if scale_bool is None:
+            raise ValueError(f"Model {model_name} does not have a 'scale' attribute to determine scale label")
 
         train_data = joblib.load(file_path)
         X_train = train_data["x"]
@@ -146,13 +160,15 @@ def fit_models(
             X_subset = X[indices]
             y_subset = y[indices]
             print(f"Subset shape: {X_subset.shape}, {y_subset.shape}")
-
+        
             # run k-fold cross-validation on the subsetted data
             kfold_result = run_kfold_on_subset_data(model, X_subset, y_subset, n_splits=5)
 
             kfold_result = {
                 "model_name": model_name,
+                "subject_id": sub_id,
                 "feature_type": strategy_feature_type,
+                "scale": scale_bool,
                 "proportion": prop,
                 "scores": kfold_result
             }
@@ -174,7 +190,7 @@ def main():
         model_name=str(WINNING_MODEL["model_name"]),
         feature_type=str(WINNING_MODEL["feature_type"]),
         scale=bool(WINNING_MODEL["scale"]),
-        config=dict(WINNING_MODEL["config"])
+        config=cast(dict[str, object], WINNING_MODEL["config"])
     )
 
     fit_models(model_strategy, enable_feature_cache=True)

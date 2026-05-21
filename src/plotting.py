@@ -1,3 +1,6 @@
+from PIL.ImageChops import add
+from jax.scipy.stats import mode
+from absl.logging import error
 from matplotlib.pylab import plot
 from pyexpat import model
 from pathlib import Path
@@ -10,6 +13,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 def plot_confusion_matrices_grid(img_dir: Path, set_tag: str):
     """Plot confusion matrices in a grid and save as PDF"""
@@ -784,3 +788,224 @@ def plot_mean_accuracy_per_feature(summary_df: pd.DataFrame, output_dir: Path, m
     plotname = f"top_model_performance_by_feature_type_model-{model_name}"
     save_to_html(fig, output_dir, plotname)
     save_to_png(fig, output_dir, plotname)
+
+def plot_mean_kfold_accuracy_per_proportion(
+    summary_df: pd.DataFrame,
+    output_dir: Path,
+    model_name: str,
+    line_color: str = CATEGORICAL_PALETTE[0],
+):
+    """Plot line chart of mean k-fold accuracy for each training proportion."""
+    model_df = summary_df[summary_df["model_name"] == model_name]
+    model_df = remap_labels(model_df)
+
+    x_col = "training_proportion" if "training_proportion" in model_df.columns else "proportion"
+    y_col = "accuracy" if "accuracy" in model_df.columns else "score"
+    error_col = "accuracy_std" if "accuracy_std" in model_df.columns else "score_std"
+
+    hover_data = {"model_name": True, "feature_type": True, y_col: ":.4f"}
+    if "scale" in model_df.columns:
+        hover_data["scale"] = True
+
+    fig = px.line(
+        model_df,
+        x=x_col,
+        y=y_col,
+        error_y=error_col if error_col in model_df.columns else None,
+        hover_data=hover_data,
+        markers=True
+    )
+
+    fig.update_traces(line=dict(color=line_color))
+
+    fig = apply_theme(
+        fig,
+        title=f"{MODEL_LABEL_MAP[model_name]} K-Fold Performance by Dataset Proportion",
+        xaxis_title="Dataset Proportion",
+        yaxis_title="Mean Accuracy",
+        add_hline=False
+    )
+    fig.update_xaxes(
+        tickformat=".0%",
+        tickmode="linear",
+        tick0=0.0,
+        dtick=0.2,
+        range=[-0.05, 1.05],
+        showgrid=True,
+        gridcolor="#DDDDDD",
+        gridwidth=1,
+    )
+    fig.update_yaxes(range=[0.0, 0.5])  # Set y-axis range to [0, 1] for accuracy
+
+    plotname = f"kfold_performance_by_dataset_proportion_model-{model_name}"
+    save_to_html(fig, output_dir, plotname)
+    save_to_png(fig, output_dir, plotname)
+
+def plot_mean_train_pred_time_per_proportion(summary_df: pd.DataFrame, output_dir: Path, model_name: str,
+    time_type: str = "train"):
+    """Plot line chart of mean training and prediction time for each training proportion."""
+    model_df = summary_df[summary_df["model_name"] == model_name]
+    model_df = remap_labels(model_df)
+
+    fig = go.Figure()
+
+    x_col = "training_proportion" if "training_proportion" in model_df.columns else "proportion"
+
+    if time_type == "train":
+        mean_col = "train_time_mean" if "train_time_mean" in model_df.columns else "train_time"
+        std_col = "train_time_std" if "train_time_std" in model_df.columns else None
+    elif time_type == "pred":
+        mean_col = "pred_time_mean" if "pred_time_mean" in model_df.columns else "pred_time"
+        std_col = "pred_time_std" if "pred_time_std" in model_df.columns else None
+
+    if mean_col in model_df.columns:
+        trace_kwargs = dict(
+            x=model_df[x_col],
+            y=model_df[mean_col],
+            mode="lines+markers",
+            name="Training Time (seconds)" if time_type == "train" else "Prediction Time (seconds)",
+            hovertemplate=(
+                "Dataset Proportion: %{x:.0%}<br>"
+                + ("Train Time" if time_type == "train" else "Prediction Time")
+                + ": %{y:.4f} seconds<extra></extra>"
+            ),
+            line=dict(color=CATEGORICAL_PALETTE[1] if time_type == "train" else CATEGORICAL_PALETTE[2]),
+        )
+        if std_col and std_col in model_df.columns:
+            trace_kwargs["error_y"] = dict(type="data", array=model_df[std_col], visible=True)
+        fig.add_trace(go.Scatter(**trace_kwargs))
+
+        if time_type == "train":
+            fig.update_yaxes(range=[0, 1.5])
+        elif time_type == "pred":
+            fig.update_yaxes(range=[0, 0.03])
+
+    fig = apply_theme(
+        fig,
+        title=f"{MODEL_LABEL_MAP[model_name]} Training & Prediction Time by Dataset Proportion",
+        xaxis_title="Dataset Proportion",
+        yaxis_title="Time (seconds)",
+        add_hline=False
+    )
+    fig.update_xaxes(
+        tickformat=".0%",
+        tickmode="linear",
+        tick0=0.0,
+        dtick=0.2,
+        range=[-0.05, 1.05],
+        showgrid=True,
+        gridcolor="#DDDDDD",
+        gridwidth=1,
+    )
+
+    plotname = f"kfold_{time_type}_time_by_dataset_proportion_model-{model_name}"
+    save_to_html(fig, output_dir, plotname)
+    save_to_png(fig, output_dir, plotname)
+
+def plot_kfold_summary_subplots(summary_df: pd.DataFrame, output_dir: Path, model_name: str):
+    """Plot k-fold accuracy, training time, and prediction time stacked vertically."""
+    model_df = summary_df[summary_df["model_name"] == model_name].copy()
+    model_df = remap_labels(model_df)
+
+    x_col = "training_proportion" if "training_proportion" in model_df.columns else "proportion"
+
+    fig = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.06,
+        row_titles=["Accuracy", "Training Time", "Prediction Time"],
+    )
+
+    # Accuracy trace.
+    acc_y_col = "accuracy" if "accuracy" in model_df.columns else "score"
+    acc_err_col = "accuracy_std" if "accuracy_std" in model_df.columns else "score_std"
+    fig.add_trace(
+        go.Scatter(
+            x=model_df[x_col],
+            y=model_df[acc_y_col],
+            mode="lines+markers",
+            name="Accuracy",
+            line=dict(color=CATEGORICAL_PALETTE[0]),
+            error_y=dict(
+                type="data",
+                array=model_df[acc_err_col],
+                visible=acc_err_col in model_df.columns,
+            ) if acc_err_col in model_df.columns else None,
+            hovertemplate="Dataset Proportion: %{x:.0%}<br>Accuracy: %{y:.4f}<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+
+    # Training time trace.
+    if "train_time_mean" in model_df.columns or "train_time" in model_df.columns:
+        train_y_col = "train_time_mean" if "train_time_mean" in model_df.columns else "train_time"
+        train_err_col = "train_time_std" if "train_time_std" in model_df.columns else None
+        fig.add_trace(
+            go.Scatter(
+                x=model_df[x_col],
+                y=model_df[train_y_col],
+                mode="lines+markers",
+                name="Training Time",
+                line=dict(color=CATEGORICAL_PALETTE[1]),
+                error_y=dict(type="data", array=model_df[train_err_col], visible=True) if train_err_col in model_df.columns else None,
+                hovertemplate="Dataset Proportion: %{x:.0%}<br>Train Time: %{y:.4f} seconds<extra></extra>",
+            ),
+            row=2,
+            col=1,
+        )
+
+    # Prediction time trace.
+    if "pred_time_mean" in model_df.columns or "pred_time" in model_df.columns:
+        pred_y_col = "pred_time_mean" if "pred_time_mean" in model_df.columns else "pred_time"
+        pred_err_col = "pred_time_std" if "pred_time_std" in model_df.columns else None
+        fig.add_trace(
+            go.Scatter(
+                x=model_df[x_col],
+                y=model_df[pred_y_col],
+                mode="lines+markers",
+                name="Prediction Time",
+                line=dict(color=CATEGORICAL_PALETTE[2]),
+                error_y=dict(type="data", array=model_df[pred_err_col], visible=True) if pred_err_col in model_df.columns else None,
+                hovertemplate="Dataset Proportion: %{x:.0%}<br>Prediction Time: %{y:.4f} seconds<extra></extra>",
+            ),
+            row=3,
+            col=1,
+        )
+
+    fig.update_layout(
+        template="plotly_white",
+        title=dict(
+            text=f"Top Performing {MODEL_LABEL_MAP[model_name]} K-Fold Summary by Dataset Proportion",
+            x=0.5,
+            xanchor="center",
+        ),
+        width=1200,
+        height=1200,
+        legend=dict(orientation="h", yanchor="top", y=1.02, xanchor="right", x=1),
+        font=dict(family="Times New Roman", size=14, color="#333333"),
+    )
+
+    for row in (1, 2, 3):
+        fig.update_xaxes(
+            tickformat=".0%",
+            tickmode="linear",
+            tick0=0.0,
+            dtick=0.2,
+            range=[-0.05, 1.05],
+            showgrid=True,
+            gridcolor="#DDDDDD",
+            gridwidth=1,
+            row=row,
+            col=1,
+        )
+
+    fig.update_yaxes(title_text="Accuracy", row=1, col=1, range=[0.0, 0.5])
+    fig.update_yaxes(title_text="Time (seconds)", row=2, col=1)
+    fig.update_yaxes(title_text="Time (seconds)", row=3, col=1, range=[0.0, 0.027])
+
+    plotname = f"kfold_summary_subplots_model-{model_name}"
+    save_to_html(fig, output_dir, plotname)
+    save_to_png(fig, output_dir, plotname)
+
