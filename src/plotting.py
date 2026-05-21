@@ -160,6 +160,15 @@ def save_to_html(
     fig.write_html(plot_path)
     print(f"Saved model performance plot to {plot_path.resolve()}")
 
+
+CONFUSION_RATE_COLORSCALE = [
+    [0.0, THEME_COLORS["navy_deep"]],
+    [0.25, THEME_COLORS["navy"]],
+    [0.5, THEME_COLORS["blue"]],
+    [0.75, THEME_COLORS["coral"]],
+    [1.0, THEME_COLORS["orange"]],
+]
+
 ###
 # PLOTLY PLOTS
 ###
@@ -789,6 +798,47 @@ def plot_mean_accuracy_per_feature(summary_df: pd.DataFrame, output_dir: Path, m
     save_to_html(fig, output_dir, plotname)
     save_to_png(fig, output_dir, plotname)
 
+
+def plot_mean_accuracy_per_feature_all_models(summary_df: pd.DataFrame, output_dir: Path):
+    """Plot boxplots of grid-search scores for each feature type, colored by model."""
+    grid_df = summary_df[summary_df["config"].notna()].copy()
+    if grid_df.empty:
+        print("No grid-search rows found, skipping grid boxplot.")
+        return
+
+    grid_df["score"] = pd.to_numeric(grid_df["score"], errors="coerce")
+    grid_df = grid_df[grid_df["score"].notna()].copy()
+    plot_df = remap_labels(grid_df)
+    plot_df = plot_df.dropna(subset=["model_name", "feature_type"])
+
+    model_names = list(MODEL_LABEL_MAP.values())
+    model_color_map = get_color_map(model_names)
+
+    fig = px.box(
+        plot_df,
+        x="feature_type",
+        y="score",
+        color="model_name",
+        hover_data={"scale": True, "config": True, "score": ":.4f"},
+        color_discrete_map=model_color_map,
+        category_orders={"model_name": model_names},
+    )
+
+    fig = apply_theme(
+        fig,
+        title="Grid-Search Mean Accuracy by Feature Extraction and Model",
+        xaxis_title="Feature Extraction",
+        yaxis_title="Accuracy",
+        legend_title="Model",
+    )
+    fig.update_xaxes(tickangle=0)
+    fig.update_yaxes(range=[0.17, 0.43])  # Set y-axis range to [0, 1] for accuracy
+    fig.update_layout(boxmode="group")
+
+    plotname = "grid_search_accuracy_by_feature_type_and_model"
+    save_to_html(fig, output_dir, plotname)
+    save_to_png(fig, output_dir, plotname)
+
 def plot_mean_kfold_accuracy_per_proportion(
     summary_df: pd.DataFrame,
     output_dir: Path,
@@ -1009,3 +1059,251 @@ def plot_kfold_summary_subplots(summary_df: pd.DataFrame, output_dir: Path, mode
     save_to_html(fig, output_dir, plotname)
     save_to_png(fig, output_dir, plotname)
 
+
+def _parse_confusion_matrix(value):
+    if value is None:
+        return None
+    if isinstance(value, np.ndarray):
+        return value
+    if isinstance(value, (list, tuple)):
+        return np.asarray(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped or stripped.lower() == "na":
+            return None
+        rows = []
+        for line in stripped.splitlines():
+            cleaned_line = line.strip().strip("[]")
+            if not cleaned_line:
+                continue
+            row = np.fromstring(cleaned_line, sep=" ")
+            if row.size:
+                rows.append(row)
+        if rows:
+            try:
+                return np.vstack(rows)
+            except ValueError:
+                return None
+    return None
+
+
+def plot_top_grid_confusion_matrix_rates(summary_df: pd.DataFrame, output_dir: Path):
+    """Plot the row-normalized confusion matrix for the top grid-search configuration."""
+    grid_df = summary_df[summary_df["config"].notna()].copy()
+    if grid_df.empty:
+        print("No grid-search rows found, skipping confusion matrix plot.")
+        return
+
+    grid_df["score"] = pd.to_numeric(grid_df["score"], errors="coerce")
+    grid_df = grid_df[grid_df["score"].notna()].copy()
+
+    grouped_df = (
+        grid_df
+        .groupby(["model_name", "feature_type", "scale", "config"], as_index=False)["score"]
+        .mean()
+        .sort_values("score", ascending=False)
+    )
+    top_row = grouped_df.iloc[0]
+
+    top_mask = (
+        (grid_df["model_name"] == top_row["model_name"]) &
+        (grid_df["feature_type"] == top_row["feature_type"]) &
+        (grid_df["scale"] == top_row["scale"]) &
+        (grid_df["config"] == top_row["config"])
+    )
+    top_df = grid_df.loc[top_mask].copy()
+
+    matrices = [
+        _parse_confusion_matrix(value)
+        for value in top_df["confusion_matrix"]
+    ]
+    matrices = [matrix for matrix in matrices if matrix is not None]
+    if not matrices:
+        print("Top grid-search configuration has no parsable confusion matrices.")
+        return
+
+    aggregate_confusion = np.sum(np.stack(matrices, axis=0), axis=0)
+    row_sums = aggregate_confusion.sum(axis=1, keepdims=True)
+    normalized_confusion = np.divide(
+        aggregate_confusion,
+        row_sums,
+        out=np.zeros_like(aggregate_confusion, dtype=float),
+        where=row_sums != 0,
+    )
+
+    class_labels = [str(idx) for idx in range(normalized_confusion.shape[0])]
+    annotations = np.vectorize(lambda x: f"{x:.2f}")(normalized_confusion)
+    zmin = float(np.nanmin(normalized_confusion))
+    zmax = float(np.nanmax(normalized_confusion))
+    if zmin == zmax:
+        zmax = zmin + 1e-9
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=normalized_confusion,
+            x=class_labels,
+            y=class_labels,
+            text=annotations,
+            texttemplate="%{text}",
+            textfont=dict(color="white", size=12),
+            colorscale=CONFUSION_RATE_COLORSCALE,
+            zmin=zmin,
+            zmax=zmax,
+            colorbar=dict(title="Rate"),
+            hovertemplate="True: %{y}<br>Predicted: %{x}<br>Rate: %{z:.3f}<extra></extra>",
+        )
+    )
+
+    model_name = MODEL_LABEL_MAP.get(top_row["model_name"], top_row["model_name"])
+
+    title = (
+        f"Top Performing {model_name} Confusion Matrix Rates"
+    )
+    fig = apply_theme(
+        fig,
+        title=title,
+        xaxis_title="Predicted class",
+        yaxis_title="True class",
+        legend_title="",
+        height=700,
+        width=900,
+        add_hline=False,
+    )
+    fig.update_yaxes(autorange="reversed")
+    fig.update_xaxes(side="bottom")
+
+    plotname = "top_grid_confusion_matrix_rates"
+    save_to_html(fig, output_dir, plotname)
+    save_to_png(fig, output_dir, plotname)
+
+
+def plot_summary_table(
+    summary_df: pd.DataFrame,
+    output_dir: Path,
+    plotname: str,
+    title: str,
+    height: int = 600,
+    sort_by: str | None = None,
+    ascending: bool = False,
+    percent_columns: list[str] | None = None,
+):
+    """Render a dataframe as a styled Plotly table."""
+    table_df = summary_df.copy()
+
+    sort_columns = []
+    sort_ascending = []
+
+    if "model_name" in table_df.columns:
+        model_order = list(MODEL_LABEL_MAP.keys())
+        table_df["model_name"] = pd.Categorical(
+            table_df["model_name"], categories=model_order, ordered=True
+        )
+        sort_columns.append("model_name")
+        sort_ascending.append(True)
+
+    if "feature_type" in table_df.columns:
+        feature_order = list(FEATURE_LABEL_MAP.keys())
+        table_df["feature_type"] = pd.Categorical(
+            table_df["feature_type"], categories=feature_order, ordered=True
+        )
+        sort_columns.append("feature_type")
+        sort_ascending.append(True)
+
+    if sort_by and sort_by in table_df.columns:
+        sort_columns.append(sort_by)
+        sort_ascending.append(ascending)
+
+    if sort_columns:
+        table_df = table_df.sort_values(sort_columns, ascending=sort_ascending)
+
+    # if column names [score, score_std] exist rename them to [accuracy, accuracy_std] 
+    if "score" in table_df.columns and "score_std" in table_df.columns:
+        table_df = table_df.rename(columns={"score": "accuracy", "score_std": "accuracy_std"})
+
+    percent_columns = percent_columns or []
+
+    def _format_value(column_name, value):
+        if pd.isna(value):
+            return ""
+        if column_name == "pred_time_std":
+            try:
+                return f"{float(value):.4f}"
+            except (TypeError, ValueError):
+                return str(value)
+        if column_name in percent_columns:
+            try:
+                return f"{float(value):.3%}"
+            except (TypeError, ValueError):
+                return str(value)
+        if isinstance(value, (float, np.floating)):
+            return f"{float(value):.3f}"
+        if isinstance(value, (int, np.integer)):
+            return str(int(value))
+        return str(value)
+
+    display_df = pd.DataFrame(
+        {
+            column: [
+                _format_value(column, value)
+                for value in table_df[column].tolist()
+            ]
+            for column in table_df.columns
+        }
+    )
+
+    row_count = len(display_df)
+    numeric_columns = [
+        column for column in table_df.columns
+        if pd.api.types.is_numeric_dtype(table_df[column])
+    ]
+    column_widths = [80 if column in numeric_columns else 160 for column in display_df.columns]
+    row_fill = [
+        ["#FFFFFF" if idx % 2 == 0 else "#F7FAFC" for idx in range(row_count)]
+        for _ in display_df.columns
+    ]
+
+    header_fill = THEME_COLORS["navy_deep"]
+    cell_font_color = "#1F2937"
+
+    fig = go.Figure(
+        data=[
+            go.Table(
+                header=dict(
+                    values=[f"<b>{column}</b>" for column in display_df.columns],
+                    fill_color=THEME_COLORS["navy"],
+                    font=dict(color="white", size=18, family="Times New Roman"),
+                    align="left",
+                    height=30,
+                    line_color=header_fill,
+                ),
+                cells=dict(
+                    values=[display_df[column] for column in display_df.columns],
+                    fill_color=row_fill,
+                    font=dict(color=cell_font_color, size=[18] * len(display_df.columns), family="Times New Roman"),
+                    align="left",
+                    height=28,
+                    line_color="#D9E2EC",
+                ),
+                columnwidth=column_widths,
+            )
+        ]
+    )
+
+    fig.update_layout(
+        title=dict(
+            text=title,
+            x=0.5,
+            xanchor="center",
+            font=dict(size=24, color="#333333"),
+        ),
+        template="plotly_white",
+        width=max(600, 160 * len(display_df.columns)),
+        height=max(height, 32 * (row_count + 1)),
+        margin=dict(l=20, r=20, t=70, b=20),
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(family="Times New Roman", size=14, color="#333333"),
+    )
+
+    save_to_html(fig, output_dir, plotname)
+    save_to_png(fig, output_dir, plotname)

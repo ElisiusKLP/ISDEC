@@ -11,8 +11,10 @@ import plotly.express as px
 from plotting import (
     plot_all_models_average_score,
     plot_mean_sd_plot,
-    plot_top_fit_per_feature,
+    plot_top_fit_per_feature, plot_mean_accuracy_per_feature_all_models,
     plot_within_model_comparison,
+    plot_top_grid_confusion_matrix_rates,
+    plot_summary_table,
     plot_violin_per_feature,
     plot_violin_per_model,
     plot_violin_per_model_and_feature,
@@ -217,6 +219,10 @@ def summarise_results():
         summary_df,
         output_dir=summary_dir
     )
+    plot_top_grid_confusion_matrix_rates(
+        summary_df,
+        output_dir=summary_dir,
+    )
 
     # aggregate summary by model, feature_type, scale and config, and calculate mean score across subjects
     summary_df_aggregated_config = create_aggregated_feature_config_summary(summary_df)
@@ -232,6 +238,15 @@ def summarise_results():
     summary_csv_path = summary_dir / "classification_feature_summary_aggregated.csv"
     summary_df_aggregated.to_csv(summary_csv_path, index=False)
     print(f"Saved aggregated summary CSV to {summary_csv_path.resolve()}")
+    plot_summary_table(
+        summary_df_aggregated,
+        output_dir=summary_dir,
+        plotname="table_classification_feature_summary_aggregated_table",
+        title="Grid-Search Model-Feature Summary",
+        sort_by="score",
+        ascending=False,
+        height=800
+    )
 
     # summary plots
     # filter summary_df to only have models: random_forest, svc, logistic_regression
@@ -247,6 +262,10 @@ def summarise_results():
         output_dir=summary_dir
     )
     plot_top_fit_per_feature(
+        summary_df_aggregated_config,
+        output_dir=summary_dir
+    )
+    plot_mean_accuracy_per_feature_all_models(
         summary_df_aggregated_config,
         output_dir=summary_dir
     )
@@ -298,6 +317,16 @@ def summarise_kfold_results():
     summary_csv_path = summary_dir / "classification_kfold_summary_aggregated.csv"
     kfold_summary_df.to_csv(summary_csv_path, index=False)
     print(f"Saved aggregated kfold summary CSV to {summary_csv_path.resolve()}")
+    plot_summary_table(
+        kfold_summary_df,
+        output_dir=summary_dir,
+        plotname="table_classification_kfold_summary_aggregated_table",
+        title="Top Random Forest Model K-Fold Summary",
+        sort_by="accuracy",
+        ascending=False,
+        percent_columns=["proportion"],
+        height=700
+    )
 
     plot_mean_kfold_accuracy_per_proportion(
         kfold_summary_df,
