@@ -14,6 +14,8 @@ __pycache__/
 **/figures/
 data/
 results_old/
+notebooks/
+
 # Ignore everything in /results except results/summary
 results/*
 !results/summary/classification_summary.csv
