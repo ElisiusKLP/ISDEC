@@ -13,8 +13,16 @@ __pycache__/
 # folders
 **/figures/
 data/
-results/
 results_old/
+# Ignore everything in /results except results/summary
+results/*
+!results/summary/classification_summary.csv
+# Un-ignore the summary directory
+!results/summary/
+# Ignore everything in /results/summary
+results/summary/*
+# Un-ignore the specific CSV file
+!results/summary/classification_summary.csv
 
 # files
 notes.md

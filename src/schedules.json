@@ -59,6 +59,7 @@
     "11": { 
       "models": ["random_forest", "svc", "logistic_regression"],
       "features": [
+        "stack",
         "mean",
         "mean_mi",
         "bandpower_mean",

@@ -9,18 +9,13 @@ import pandas as pd
 import plotly.express as px
 
 from plotting import (
-    plot_all_models_average_score,
     plot_mean_sd_plot,
     plot_top_fit_per_feature, plot_mean_accuracy_per_feature_all_models,
     plot_best_bandpower_mean_models_with_prediction,
-    plot_within_model_comparison,
     plot_top_grid_confusion_matrix_rates,
     plot_summary_table,
     plot_violin_per_feature,
     plot_violin_per_model,
-    plot_violin_per_model_and_feature,
-    plot_violin_per_model_with_feature_scatter,
-    plot_violin_per_model_with_feature_error_bars,
     plot_mean_accuracy_per_feature,
     plot_mean_kfold_accuracy_per_proportion,
     plot_mean_train_pred_time_per_proportion,
@@ -216,10 +211,6 @@ def summarise_results():
         summary_df = pd.read_csv(summary_df_path)
 
     # Plot grid-based results (if any exist)
-    plot_within_model_comparison(
-        summary_df,
-        output_dir=summary_dir
-    )
     plot_top_grid_confusion_matrix_rates(
         summary_df,
         output_dir=summary_dir,
@@ -251,13 +242,8 @@ def summarise_results():
 
     # summary plots
     # filter summary_df to only have models: random_forest, svc, logistic_regression
-    summary_df_aggregated = summary_df_aggregated[summary_df_aggregated["model_name"].isin(["random_forest", "svc", "logistic_regression"])]
     summary_df_aggregated_config = summary_df_aggregated_config[summary_df_aggregated_config["model_name"].isin(["random_forest", "svc", "logistic_regression"])]
 
-    plot_all_models_average_score(
-        summary_df_aggregated,
-        output_dir=summary_dir
-    )
     plot_mean_sd_plot(
         summary_df_aggregated_config,
         output_dir=summary_dir
@@ -279,18 +265,6 @@ def summarise_results():
         output_dir=summary_dir
     )
     plot_violin_per_model(
-        summary_df_aggregated_config,
-        output_dir=summary_dir
-    )
-    plot_violin_per_model_and_feature(
-        summary_df_aggregated_config,
-        output_dir=summary_dir
-    )
-    plot_violin_per_model_with_feature_scatter(
-        summary_df_aggregated_config,
-        output_dir=summary_dir
-    )
-    plot_violin_per_model_with_feature_error_bars(
         summary_df_aggregated_config,
         output_dir=summary_dir
     )
