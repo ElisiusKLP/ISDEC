@@ -26,6 +26,7 @@ from features import (
     downsample_time,
     transform_to_phase,
     transform_to_band_power_with_phase,
+    transform_to_dwt_level_stats,
     transform_to_time_frequency,
     tfr_mortlet_to_cnn,
 )
@@ -713,6 +714,31 @@ def plot_channel_selection_by_mutual_info_features(
     fig.suptitle(f"Channel Selection by Mutual Information — {subject_name}", fontsize=14, fontweight='bold')
     plt.tight_layout()
     return fig
+
+
+def test_transform_to_dwt_level_stats_prints_valid_levels_and_ranges(capsys):
+    """Verify the DWT level stats helper reports valid levels and frequency ranges."""
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal((2, 3, 512), dtype=np.float32)
+    sfreq = 256.0
+
+    stats_4d, stats_3d, stats_2d = transform_to_dwt_level_stats(x, sfreq=sfreq)
+
+    captured = capsys.readouterr().out.strip()
+    print(captured)
+
+    assert "Using DWT levels:" in captured
+    assert "with frequency ranges" in captured
+    assert "Hz" in captured
+
+    assert stats_4d.ndim == 4
+    assert stats_3d.ndim == 3
+    assert stats_2d.ndim == 2
+    assert stats_4d.shape[0] == x.shape[0]
+    assert stats_4d.shape[1] == x.shape[1]
+
+    valid_levels_text = captured.split("Using DWT levels:", maxsplit=1)[1].strip()
+    print(f"DWT valid level report: {valid_levels_text}")
 
 
 # ============================================================================

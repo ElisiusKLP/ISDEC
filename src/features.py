@@ -952,6 +952,7 @@ def transform_to_dwt_level_stats(
         raise ValueError("No DWT levels fall in 0–100 Hz range")
 
     n_levels = len(valid_levels)
+    print(f"Using DWT levels: {valid_levels} with frequency ranges {[level_freqs[j] for j in valid_levels]} Hz", flush=True)
 
     # ------------------------------------------------------------
     # Output tensor: (epochs, channels, time, levels)

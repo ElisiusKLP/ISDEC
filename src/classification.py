@@ -52,48 +52,17 @@ def _format_config_tag(config: dict | None) -> str:
 MODEL_REGISTRY = {
     "random_forest": models.RandomForestStrategy,
     "logistic_regression": models.LogisticRegressionStrategy,
-    "svc": models.SVCStrategy,
-    "linear_svc": models.LinearSVCStrategy,
-    "bagging_rf": models.BaggingRFStrategy,
-    "bagging_svc": models.BaggingSVCStrategy,
-    "eegnet": models.EEGNetStrategy,
-    "cnn": models.CNNStrategy,
+    "svc": models.SVCStrategy
 }
 
 FEATURE_TYPES = [
-    "downsample_32hz",
-    "downsample_4hz",
-    "tfr_morlet",
-    "tfr_morlet_bands",
-    "tfr_morlet_bands_stats",
-    "tfr_morlet_bands_stats_mi",
-    "tfr_dwt_cmor",
-    "tfr_morlet_cnn",
-    "stft_bands_stats",
-    "stft_bands_stats_mi",
-    "swvd_band_mean",
-    "swvd_logbins_mean",
-    "swvd_full",
-    "swvd_cnn",
-    "dwt_hierarchical_allstats",
-    "dwt_hierarchical_mean",
-    "dwt_mean_256Hz",
-    "dwt_mean_32Hz",
-    "dwt_mean_4Hz",
-    "dwt_channel_select",
-    "dwt_stats",
-    "dwt_stats_mi",
-    "tfr_pca",
-    "bandpower_mean",
-    "bandpower_mean_mi",
-    "bandpower_mean_sd",
-    "bandpower_mean_window",
-    "bandpower_mean_sd_window",
-    "bandpower_phase",
     "stack",
     "mean",
     "mean_mi",
-    "bandphase"
+    "bandpower_mean",
+    "bandpower_mean_mi",
+    "dwt_stats",
+    "dwt_stats_mi",
 ]
 
 MODEL_CHOICES = tuple(MODEL_REGISTRY.keys())

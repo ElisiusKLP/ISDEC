@@ -691,6 +691,7 @@ def create_features(
     #    return
     elif feature_type == "dwt_stats":
         _, _, tfr = transform_to_dwt_level_stats(x, sfreq=256)
+        print(f"DWT stats shape: {tfr.shape}", flush=True)
         return tfr
     elif feature_type == "dwt_stats_mi":
         if y_train is None:

@@ -82,6 +82,14 @@ def get_color_map(items):
         for i, item in enumerate(items)
     }
 
+
+def _hex_to_rgba(hex_color: str, alpha: float) -> str:
+    hex_color = hex_color.lstrip("#")
+    red = int(hex_color[0:2], 16)
+    green = int(hex_color[2:4], 16)
+    blue = int(hex_color[4:6], 16)
+    return f"rgba({red}, {green}, {blue}, {alpha})"
+
 def apply_theme(fig, title="", xaxis_title="", yaxis_title="", legend_title="", width=1200, height=600,
         add_hline=True
         ):
@@ -325,7 +333,7 @@ def plot_within_model_comparison(summary_df: pd.DataFrame, output_dir: Path):
     grouped_df.to_csv(grid_csv_path, index=False)
     print(f"Saved grid results summary to {grid_csv_path.resolve()}")
 
-
+# FIGURE 4
 def plot_top_fit_per_feature(summary_df: pd.DataFrame, output_dir: Path):
     """Plot top fit for each model within each feature type."""
     top_fit_df = (
@@ -462,13 +470,14 @@ def plot_violin_per_feature(summary_df: pd.DataFrame, output_dir: Path):
         color="feature_type",
         hover_data={"model_name": True, "scale": True, "score": ":.4f"},
         color_discrete_map=color_map,
+        category_orders={"feature_type": feature_types},
     )
 
     fig = apply_theme(
         fig,
         title="Accuracy Distribution by Feature Extraction",
         xaxis_title="Feature Extraction",
-        yaxis_title="Accuracy",
+        yaxis_title="Mean Accuracy",
         legend_title="Feature Extraction",
     )
     fig.update_xaxes(tickangle=0)
@@ -502,7 +511,7 @@ def plot_violin_per_model(summary_df: pd.DataFrame, output_dir: Path):
         fig,
         title="Accuracy Distribution by Model",
         xaxis_title="Model",
-        yaxis_title="Accuracy",
+        yaxis_title="Mean Accuracy",
         legend_title="Model",
     )
     fig.update_xaxes(tickangle=0)
@@ -798,7 +807,7 @@ def plot_mean_accuracy_per_feature(summary_df: pd.DataFrame, output_dir: Path, m
     save_to_html(fig, output_dir, plotname)
     save_to_png(fig, output_dir, plotname)
 
-
+# FIGURE 7
 def plot_mean_accuracy_per_feature_all_models(summary_df: pd.DataFrame, output_dir: Path):
     """Plot boxplots of grid-search scores for each feature type, colored by model."""
     grid_df = summary_df[summary_df["config"].notna()].copy()
@@ -811,6 +820,7 @@ def plot_mean_accuracy_per_feature_all_models(summary_df: pd.DataFrame, output_d
     plot_df = remap_labels(grid_df)
     plot_df = plot_df.dropna(subset=["model_name", "feature_type"])
 
+    feature_types = list(FEATURE_LABEL_MAP.values())
     model_names = list(MODEL_LABEL_MAP.values())
     model_color_map = get_color_map(model_names)
 
@@ -821,7 +831,7 @@ def plot_mean_accuracy_per_feature_all_models(summary_df: pd.DataFrame, output_d
         color="model_name",
         hover_data={"scale": True, "config": True, "score": ":.4f"},
         color_discrete_map=model_color_map,
-        category_orders={"model_name": model_names},
+        category_orders={"feature_type": feature_types, "model_name": model_names},
     )
 
     fig = apply_theme(
@@ -836,6 +846,132 @@ def plot_mean_accuracy_per_feature_all_models(summary_df: pd.DataFrame, output_d
     fig.update_layout(boxmode="group")
 
     plotname = "grid_search_accuracy_by_feature_type_and_model"
+    save_to_html(fig, output_dir, plotname)
+    save_to_png(fig, output_dir, plotname)
+
+
+def plot_best_bandpower_mean_models_with_prediction(
+    summary_df: pd.DataFrame,
+    output_dir: Path,
+    predicted_samples: int = 1000,
+):
+    """Plot the best bandpower mean score for each model and a predicted fourth bar."""
+    target_models = ["logistic_regression", "random_forest", "svc"]
+    reverse_model_map = {label: raw for raw, label in MODEL_LABEL_MAP.items()}
+    reverse_feature_map = {label: raw for raw, label in FEATURE_LABEL_MAP.items()}
+
+    plot_df = summary_df.copy()
+    plot_df["model_name"] = plot_df["model_name"].map(
+        lambda value: value if value in target_models else reverse_model_map.get(value)
+    )
+    plot_df["feature_type"] = plot_df["feature_type"].map(
+        lambda value: value if value == "bandpower_mean" else reverse_feature_map.get(value)
+    )
+    plot_df = plot_df[
+        plot_df["model_name"].isin(target_models)
+        & (plot_df["feature_type"] == "bandpower_mean")
+    ].copy()
+
+    if plot_df.empty:
+        print("No bandpower_mean rows found for the target models, skipping bar chart.")
+        return
+
+    plot_df["score"] = pd.to_numeric(plot_df["score"], errors="coerce")
+    plot_df = plot_df[plot_df["score"].notna()].copy()
+    if plot_df.empty:
+        print("No numeric scores found for bandpower_mean rows, skipping bar chart.")
+        return
+
+    best_rows = (
+        plot_df.sort_values("score", ascending=False)
+        .groupby("model_name", as_index=False)
+        .first()
+    )
+    best_rows = best_rows.set_index("model_name").reindex(target_models)
+    best_rows = best_rows.dropna(subset=["score"])
+
+    if best_rows.empty:
+        print("No complete best rows found for the target models, skipping bar chart.")
+        return
+
+    model_labels = [MODEL_LABEL_MAP[model_name] for model_name in best_rows.index]
+    model_color_map = get_color_map(model_labels)
+    random_forest_label = MODEL_LABEL_MAP["random_forest"]
+    random_forest_color = model_color_map[random_forest_label]
+
+    predicted_score = 0.0004365 * predicted_samples + 0.25778
+    x_positions = [0.0, 0.85, 1.70, 3.10]
+    bar_width = 0.62
+
+    fig = go.Figure()
+
+    for x_pos, (model_name, row) in zip(x_positions[: len(best_rows)], best_rows.iterrows()):
+        model_label = MODEL_LABEL_MAP[model_name]
+        fig.add_trace(
+            go.Bar(
+                x=[x_pos],
+                y=[row["score"]],
+                width=bar_width,
+                name=model_label,
+                marker_color=_hex_to_rgba(model_color_map[model_label], 1.0),
+                opacity=1.0,
+                hovertemplate=(
+                    f"Model: {model_label}<br>"
+                    "Feature: Bandpower Mean<br>"
+                    "Mean Accuracy: %{y:.4f}<extra></extra>"
+                ),
+                showlegend=False,
+            )
+        )
+
+    predicted_x = x_positions[3]
+    fig.add_trace(
+        go.Bar(
+            x=[predicted_x],
+            y=[predicted_score],
+            width=bar_width,
+            name="Predicted accuracy with 1000 samples",
+            marker_color=_hex_to_rgba(random_forest_color, 0.82),
+            opacity=0.82,
+            hovertemplate=(
+                "Model: Predicted accuracy with 1000 samples<br>"
+                f"Samples: {predicted_samples}<br>"
+                "Mean Accuracy: %{y:.4f}<extra></extra>"
+            ),
+            showlegend=False,
+        )
+    )
+
+    fig = apply_theme(
+        fig,
+        title="Best Bandpower Mean Accuracy by Model",
+        xaxis_title="Model",
+        yaxis_title="Mean Accuracy",
+        legend_title="",
+        height=650,
+        add_hline=False,
+    )
+
+    fig.update_layout(barmode="group")
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=x_positions,
+        ticktext=model_labels + ["Predicted RF"],
+        range=[-0.6, 3.9],
+    )
+    fig.update_yaxes(range=[0.0, 1.0])
+
+    fig.add_annotation(
+        x=predicted_x - 0.2,
+        y=predicted_score,
+        text="Predicted RF accuracy with 1000 samples",
+        showarrow=True,
+        xanchor="left",
+        yanchor="middle",
+        font=dict(size=14, color="#333333"),
+    )
+
+    plotname = "best_bandpower_mean_models_with_prediction"
     save_to_html(fig, output_dir, plotname)
     save_to_png(fig, output_dir, plotname)
 
@@ -1307,3 +1443,4 @@ def plot_summary_table(
 
     save_to_html(fig, output_dir, plotname)
     save_to_png(fig, output_dir, plotname)
+

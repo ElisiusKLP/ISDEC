@@ -12,6 +12,7 @@ from plotting import (
     plot_all_models_average_score,
     plot_mean_sd_plot,
     plot_top_fit_per_feature, plot_mean_accuracy_per_feature_all_models,
+    plot_best_bandpower_mean_models_with_prediction,
     plot_within_model_comparison,
     plot_top_grid_confusion_matrix_rates,
     plot_summary_table,
@@ -268,6 +269,10 @@ def summarise_results():
     plot_mean_accuracy_per_feature_all_models(
         summary_df_aggregated_config,
         output_dir=summary_dir
+    )
+    plot_best_bandpower_mean_models_with_prediction(
+        summary_df_aggregated_config,
+        output_dir=summary_dir,
     )
     plot_violin_per_feature(
         summary_df_aggregated_config,
