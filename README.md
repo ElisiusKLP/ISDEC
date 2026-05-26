@@ -2,7 +2,7 @@
 
 **Optimising EEG Imagined Speech Decoding: A Grid-Search Analysis of Models and Feature Representations**
 
-This project explores the performance of **2,258 model-feature-hyperparameter combinations** for decoding imagined speech from EEG data. We systematically evaluate **Logistic Regression, Random Forest, and SVM** classifiers across a range of feature extraction methods—from time-domain statistics to frequency-domain (Bandpower Mean) and time-frequency-domain (Discrete Wavelet Transform) representations. The study identifies **Random Forest with Bandpower Mean features** as the top-performing pipeline, achieving **38.7% decoding accuracy** in a 5-fold cross-validation (5 words/phrases) and highlighting the critical role of spectral information in EEG-based imagined speech classification.
+This project explores the performance of **2,258 model-feature-hyperparameter combinations** for decoding imagined speech from EEG data. We systematically evaluate **Logistic Regression, Random Forest, and SVM** classifiers across a range of feature extraction methods—from time-domain statistics to frequency-domain (Bandpower Mean) and time-frequency-domain (Discrete Wavelet Transform) representations. The study identifies **Random Forest with Bandpower Mean features** as the top-performing pipeline, achieving **38.7% decoding accuracy** in a 5-fold cross-validation (5 words/phrases) and highlights the critical role of spectral information in EEG-based imagined speech classification.
 
 Authors
 Elisius Krustrup Lyng Pedersen.
