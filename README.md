@@ -42,7 +42,8 @@ When the data is in the right folder you can run the full preprocessing + analys
 1. ``uv run src/dataset.py``
 2. ``uv run src/preprocess.py``
 3. ``uv run src/schedule.py -s 11 --use-config``
-4. ``uv run src/summarise_results``
+4. ``uv run src/kfold_crossval.py``
+5. ``uv run src/summarise_results``
 
 ## Scripts
 
