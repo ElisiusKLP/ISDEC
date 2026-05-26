@@ -1,9 +1,6 @@
-from etils.etree import stack
 import numpy as np
 import mne
 from typing import Literal
-import pywt
-import numpy as np
 import pywt
 from scipy.signal import resample_poly
 from scipy.stats import entropy

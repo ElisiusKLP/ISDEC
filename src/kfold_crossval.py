@@ -1,9 +1,6 @@
-from matplotlib.pylab import sca
 import models
 import numpy as np
-import sklearn
 import joblib
-import typer
 import re
 import time
 from typing import cast

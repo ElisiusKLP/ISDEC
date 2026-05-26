@@ -1,17 +1,15 @@
 import click
 import matplotlib
 matplotlib.use("Agg")
-from matplotlib.pylab import plot
 import models
 import numpy as np
 import re
-import sklearn
 import joblib
 import typer
 import time
 from rich import print
 from pathlib import Path
-from sklearn.metrics import accuracy_score, confusion_matrix
+from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay
 from tqdm import tqdm
 from models import ModelStrategy
 from plotting import plot_confusion_matrices_grid
@@ -274,7 +272,7 @@ def fit_model(
         print(f"Saved scores to {score_log_path.resolve()}")
 
         # save plot for this subject
-        disp = sklearn.metrics.ConfusionMatrixDisplay(
+        disp = ConfusionMatrixDisplay(
             confusion_matrix=confusion_matrix_val,
             display_labels=class_labels,
         )
