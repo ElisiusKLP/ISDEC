@@ -8,8 +8,11 @@ import h5py
 from tqdm import tqdm
 import joblib
 import re
+from os_utils import mne_to_dict
 
 def create_dataset(data_dir, output_dir):
+    """Create a dataset by converting .mat files to MNE epochs and saving them in both .fif and joblib formats."""
+    # Setup paths for input and output
     data_dir = Path(data_dir)
     output_dir = Path(output_dir)
     split_name = data_dir.name.lower().replace(" ", "_")
@@ -19,8 +22,10 @@ def create_dataset(data_dir, output_dir):
     mne_dir.mkdir(parents=True, exist_ok=True)
     joblib_dir.mkdir(parents=True, exist_ok=True)
     
+    # Find all .mat files in the input directory
     all_files = list(data_dir.glob('*.mat'))
 
+    # Process each .mat file
     for mat_file in tqdm(all_files, desc="Processing files"):
         # Find subject id from filename
         pattern = r"Data_Sample(\d{2})\.mat"
@@ -88,6 +93,7 @@ def convert_mat_to_mne(mat_file):
         montage = mat_to_mne_montage(mat_data=mat_data, set_type="train")
 
     except NotImplementedError:
+        # If we get a NotImplementedError, it may be because the .mat file is in MATLAB v7.3 format, which is HDF5-based and not supported by scipy.io.loadmat. In that case, we can try loading it with h5py.
         print("Detected MATLAB v7.3 file, loading with h5py...")
         with h5py.File(mat_file, "r") as h5f:
             if "epo_train" in h5f:
@@ -173,19 +179,9 @@ def convert_mat_to_mne(mat_file):
 
     return epochs
 
-def mne_to_dict(epochs, subject_id):
-    x = epochs.get_data()
-    y = epochs.events[:, -1]
-    sfreq = epochs.info['sfreq']
-
-    return {
-        'x': x,
-        'y': y,
-        'sfreq': sfreq,
-        'subject_id': subject_id
-    }
 
 def mat_to_mne_montage(mat_data, set_type: str):
+    """Convert MATLAB montage information to an MNE DigMontage object."""
 
     if set_type == "test":
         pos_3d = np.asarray(mat_data['mnt']['pos_3d'])

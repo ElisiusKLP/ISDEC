@@ -9,13 +9,146 @@ import typer
 from mne.preprocessing import ICA
 from mne_icalabel import label_components
 from rich import print
+from os_utils import mne_to_dict
 
-from dataset import mne_to_dict
-
-
+# Define input and output directories
 mne_dir = Path("data/derivatives/raw/mne")
 output_dir = Path("data/derivatives/preprocessed").absolute()
 output_dir.mkdir(parents=True, exist_ok=True)
+
+def preprocess(input_dir: Path, set_type: str, use_ica: bool = True) -> None:
+    """Preprocess all .fif epoch files in `input_dir`.
+
+    If `use_ica` is True, fit ICA on the training set and save it; for non-training
+    partitions the ICA from the training set will be loaded and applied. If False,
+    ICA and ICLabel steps are skipped entirely.
+    """
+    # Find all .fif files in the input directory
+    all_files = list(input_dir.glob("*.fif"))
+
+    # Process each .fif file
+    for file in tqdm.tqdm(all_files, desc="Preprocessing files"):
+        # Extract subject id from filename 
+        match = re.search(r"epochs_sub-(\d{2})-epo\.fif", file.name)
+        if match:
+            sub_id = match.group(1)
+            print(f"Found sub_id: {sub_id} in file: {file.name}")
+        else:
+            print(f"No match for file: {file.name}")
+
+        # read the .fif file into MNE epochs
+        subject_file = mne.read_epochs(file)
+
+        epochs = subject_file.copy()
+
+        # Notch Filter
+        # extract epochs array
+        epochs_array = epochs.get_data()
+        print(f"Original epochs array shape: {epochs_array.shape}")
+        filtered_epochs_array = mne.filter.notch_filter(epochs_array, Fs=256, freqs=60, method="iir")
+        print(f"Filtered epochs array shape: {filtered_epochs_array.shape}")
+        epochs._data = filtered_epochs_array
+
+        # Bandpass Filter
+        epochs.filter(l_freq=0.5, h_freq=100, method="iir")
+
+        # Re-reference to average
+        epochs.set_eeg_reference(ref_channels="average")
+        
+        # create copy for ICA fitting
+        epochs_for_ica = epochs.copy().filter(l_freq=1.0, h_freq=100.0, method="iir")
+
+        ica: Optional[ICA] = None
+
+        # ICA is computationally expensive, so we fit it only on the training set and save the solution. 
+        # For validation and test sets, we load the ICA solution from the training set and apply it. 
+        # If use_ica is False, we skip ICA steps entirely.
+        if use_ica and set_type == "training_set":
+            # fit ICA on training set and save solution for training set
+            ica = ICA(
+                n_components=20,
+                max_iter="auto",
+                random_state=2001,
+                method="infomax",
+                fit_params=dict(extended=True),
+            )
+
+            # save ICA solution to file for training set
+            ica_filename = output_dir / "ica" / set_type / f"ica_sub-{sub_id}-ica.fif"
+            ica_filename.parent.mkdir(parents=True, exist_ok=True)
+
+            # fit ICA and print key attributes for debugging
+            ica.fit(epochs_for_ica)
+            describe_ica(ica)
+            print(f"ICA n_components_={getattr(ica, 'n_components_', None)} for subject {sub_id}")
+            ica.save(ica_filename, overwrite=True)
+            print(f"Saved ICA solution to {ica_filename}")
+        elif use_ica and set_type != "training_set":
+            # if validation_set or test_set, load ICA solution from training set
+            ica_filename = output_dir / "ica" / "training_set" / f"ica_sub-{sub_id}-ica.fif"
+            if not ica_filename.exists():
+                raise ValueError(f"ICA file not found: {ica_filename}")
+            ica = mne.preprocessing.read_ica(ica_filename)
+            print(f"Loaded ICA solution from {ica_filename}")
+        else:
+            print("ICA disabled for this run; skipping ICA and ICLabel steps.")
+
+        ICLabel_exclusions: Dict[int, Dict] = {}
+
+        if ica is not None:
+            # ICLabeling of ICA components 
+            ic_labels = label_components(epochs_for_ica, ica, "iclabel")
+            labels = ic_labels["labels"]
+            labels_probs = ic_labels["y_pred_proba"]
+            for label, prob in zip(labels, labels_probs):
+                print(f"Component labeled as {label} with probability {prob:.2f}")
+            threshold = 0.8 # set the threshold for exclusion
+            keep_labels = ["brain", "other", "muscle artifact"] # The labels to excluce; optional add: "muscle artifact"
+            
+            # Determine which components to exclude based on the threshold and label criteria
+            exclude_idx = [
+                idx for idx, label in enumerate(labels) if label not in keep_labels and labels_probs[idx] >= threshold
+            ]
+            print(f"Excluding components {exclude_idx}")
+
+            # Add excluded components and their info to the ica exclusion dict
+            ica.exclude = exclude_idx
+            # Apply ICA to remove the excluded components from the data
+            ica.apply(epochs)
+
+            # Prepare ICLabel exclusion info for QC reporting
+            ICLabel_exclusions = {
+                idx: {"label": labels[idx], "prob": labels_probs[idx]} for idx in exclude_idx
+            }
+        else:
+            # If ICA is not used, we can optionally log that no components were excluded due to ICA being disabled.
+            ICLabel_exclusions = {}
+
+        # Baseline correction
+        epochs.apply_baseline((-0.5, 0))
+
+        print(f"ICLabel_exclusions: {ICLabel_exclusions}")
+        # Run QC to save plots and exclusion info
+        QC(
+            clean=epochs, 
+            raw=subject_file, 
+            ica=ica,
+            subject_id=sub_id, 
+            ICLabel_exclusions=ICLabel_exclusions,
+            set_type=set_type
+        )
+
+        # Save preprocessed epochs
+        preprocessed_dir = output_dir / "mne" / set_type / file.name
+        preprocessed_dir.parent.mkdir(parents=True, exist_ok=True)
+        epochs.save(preprocessed_dir, overwrite=True)
+        print(f"Saved preprocessed epochs to {preprocessed_dir}")
+
+        # Save preprocessed data to joblib
+        joblib_filename = output_dir / "joblib" / set_type / f"preprocessed_sub-{sub_id}.joblib"
+        joblib_filename.parent.mkdir(parents=True, exist_ok=True)
+        preprocessed_data = mne_to_dict(epochs, sub_id)
+        joblib.dump(preprocessed_data, joblib_filename)
 
 
 def describe_ica(ica_obj: ICA) -> None:
@@ -107,6 +240,7 @@ def QC(
     psd_path.parent.mkdir(parents=True, exist_ok=True)
     psd_plt.savefig(psd_path.resolve(), bbox_inches="tight")
 
+    # Plot ICA components if ICA was used
     if ica is not None:
         try:
             ica_plt = ica.plot_components(show=False)
@@ -118,6 +252,7 @@ def QC(
     else:
         print("Skipping ICA component plot (ICA not used)")
 
+    # Save ICLabel exclusions to a text file for this subject
     iclabel_path = qc_dir / "iclabel" / f"iclabel_sub-{subject_id}.txt"
     iclabel_path.parent.mkdir(parents=True, exist_ok=True)
     with open(iclabel_path, "w") as f:
@@ -129,125 +264,6 @@ def QC(
             f.write("ICA not applied for this subject.\n")
 
     print(f"Saved QC plots and ICLabel exclusions for subject {subject_id}")
-
-
-def preprocess(input_dir: Path, set_type: str, use_ica: bool = True) -> None:
-    """Preprocess all .fif epoch files in `input_dir`.
-
-    If `use_ica` is True, fit ICA on the training set and save it; for non-training
-    partitions the ICA from the training set will be loaded and applied. If False,
-    ICA and ICLabel steps are skipped entirely.
-    """
-    all_files = list(input_dir.glob("*.fif"))
-
-
-    for file in tqdm.tqdm(all_files, desc="Preprocessing files"):
-        match = re.search(r"epochs_sub-(\d{2})-epo\.fif", file.name)
-        if match:
-            sub_id = match.group(1)
-            print(f"Found sub_id: {sub_id} in file: {file.name}")
-        else:
-            print(f"No match for file: {file.name}")
-
-        subject_file = mne.read_epochs(file)
-
-        epochs = subject_file.copy()
-
-        # Notch Filter
-        # extract epochs array
-        epochs_array = epochs.get_data()
-        print(f"Original epochs array shape: {epochs_array.shape}")
-        filtered_epochs_array = mne.filter.notch_filter(epochs_array, Fs=256, freqs=60, method="iir")
-        print(f"Filtered epochs array shape: {filtered_epochs_array.shape}")
-        epochs._data = filtered_epochs_array
-
-        # Bandpass Filter
-        epochs.filter(l_freq=0.5, h_freq=100, method="iir")
-
-        # Re-reference to average
-        epochs.set_eeg_reference(ref_channels="average")
-        
-        # create copy for ICA fitting
-        epochs_for_ica = epochs.copy().filter(l_freq=1.0, h_freq=100.0, method="iir")
-
-        ica: Optional[ICA] = None
-
-        if use_ica and set_type == "training_set":
-            ica = ICA(
-                n_components=20,
-                max_iter="auto",
-                random_state=2001,
-                method="infomax",
-                fit_params=dict(extended=True),
-            )
-
-            ica_filename = output_dir / "ica" / set_type / f"ica_sub-{sub_id}-ica.fif"
-            ica_filename.parent.mkdir(parents=True, exist_ok=True)
-
-            ica.fit(epochs_for_ica)
-            describe_ica(ica)
-            print(f"ICA n_components_={getattr(ica, 'n_components_', None)} for subject {sub_id}")
-            ica.save(ica_filename, overwrite=True)
-            print(f"Saved ICA solution to {ica_filename}")
-        elif use_ica and set_type != "training_set":
-            # if validation_set or test_set, load ICA solution from training set
-            ica_filename = output_dir / "ica" / "training_set" / f"ica_sub-{sub_id}-ica.fif"
-            if not ica_filename.exists():
-                raise ValueError(f"ICA file not found: {ica_filename}")
-            ica = mne.preprocessing.read_ica(ica_filename)
-            print(f"Loaded ICA solution from {ica_filename}")
-        else:
-            print("ICA disabled for this run; skipping ICA and ICLabel steps.")
-
-        ICLabel_exclusions: Dict[int, Dict] = {}
-
-        if ica is not None:
-            # ICLabeling
-            ic_labels = label_components(epochs_for_ica, ica, "iclabel")
-            labels = ic_labels["labels"]
-            labels_probs = ic_labels["y_pred_proba"]
-            for label, prob in zip(labels, labels_probs):
-                print(f"Component labeled as {label} with probability {prob:.2f}")
-            threshold = 0.8
-            keep_labels = ["brain", "other", "muscle artifact"] # optional add: "muscle artifact"
-            exclude_idx = [
-                idx for idx, label in enumerate(labels) if label not in keep_labels and labels_probs[idx] >= threshold
-            ]
-            print(f"Excluding components {exclude_idx}")
-
-            ica.exclude = exclude_idx
-            ica.apply(epochs)
-
-            ICLabel_exclusions = {
-                idx: {"label": labels[idx], "prob": labels_probs[idx]} for idx in exclude_idx
-            }
-        else:
-            ICLabel_exclusions = {}
-
-        # Baseline correction
-        epochs.apply_baseline((-0.5, 0))
-
-        print(f"ICLabel_exclusions: {ICLabel_exclusions}")
-        QC(
-            clean=epochs, 
-            raw=subject_file, 
-            ica=ica,
-            subject_id=sub_id, 
-            ICLabel_exclusions=ICLabel_exclusions,
-            set_type=set_type
-        )
-
-        # Save preprocessed epochs
-        preprocessed_dir = output_dir / "mne" / set_type / file.name
-        preprocessed_dir.parent.mkdir(parents=True, exist_ok=True)
-        epochs.save(preprocessed_dir, overwrite=True)
-        print(f"Saved preprocessed epochs to {preprocessed_dir}")
-
-        # Save preprocessed data to joblib
-        joblib_filename = output_dir / "joblib" / set_type / f"preprocessed_sub-{sub_id}.joblib"
-        joblib_filename.parent.mkdir(parents=True, exist_ok=True)
-        preprocessed_data = mne_to_dict(epochs, sub_id)
-        joblib.dump(preprocessed_data, joblib_filename)
 
 
 def main(ica: bool = typer.Option(True, "--ica/--no-ica", help="Include ICA in preprocessing.")) -> None:

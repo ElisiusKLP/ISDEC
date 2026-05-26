@@ -24,8 +24,6 @@ from models import create_features as create_model_features
 from features import (
     transform_to_band_power,
     downsample_time,
-    transform_to_phase,
-    transform_to_band_power_with_phase,
     transform_to_dwt_level_stats,
     transform_to_time_frequency,
     tfr_mortlet_to_cnn,
@@ -804,23 +802,6 @@ def test_feature_extraction(n_subjects: int = 5, sfreq: float = 200.0):
         
         try:
             # ================================================================
-            # Test 2: Phase Extraction
-            # ================================================================
-            print(f"  Testing phase extraction...", end=" ")
-            phase_features = transform_to_phase(X, sfreq=sfreq, freq_range=(1.0, 40.0))
-            print(f"✓ shape: {phase_features.shape}")
-            
-            fig = plot_phase_features(X, phase_features, sfreq, subject_name, freq_range=(1.0, 40.0))
-            fig_path = subject_dir / f"{subject_name}_phase.png"
-            fig.savefig(fig_path, dpi=100, bbox_inches='tight')
-            plt.close(fig)
-            print(f"Saved: {fig_path.name}")
-            
-        except Exception as e:
-            print(f"✗ Error: {e}")
-        
-        try:
-            # ================================================================
             # Test 3: Downsampling
             # ================================================================
             print(f"  Testing temporal downsampling...", end=" ")
@@ -829,27 +810,6 @@ def test_feature_extraction(n_subjects: int = 5, sfreq: float = 200.0):
             
             fig = plot_downsampling_effect(X, X_downsampled, original_sfreq=sfreq, target_sfreq=10.0, subject_name=subject_name)
             fig_path = subject_dir / f"{subject_name}_downsampling.png"
-            fig.savefig(fig_path, dpi=100, bbox_inches='tight')
-            plt.close(fig)
-            print(f"    Saved: {fig_path.name}")
-            
-        except Exception as e:
-            print(f"✗ Error: {e}")
-        
-        try:
-            # ================================================================
-            # Test 4: Combined Features
-            # ================================================================
-            print(f"  Testing combined features...", end=" ")
-            X_combined = transform_to_band_power_with_phase(
-                X,
-                sfreq=sfreq,
-                bands=DEFAULT_BANDS,
-            )
-            print(f"✓ shape: {X_combined.shape}")
-            
-            fig = plot_combined_features(X, X_combined, sfreq, subject_name)
-            fig_path = subject_dir / f"{subject_name}_combined.png"
             fig.savefig(fig_path, dpi=100, bbox_inches='tight')
             plt.close(fig)
             print(f"    Saved: {fig_path.name}")
