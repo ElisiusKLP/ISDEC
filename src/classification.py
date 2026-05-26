@@ -1,17 +1,15 @@
 import click
 import matplotlib
 matplotlib.use("Agg")
-from matplotlib.pylab import plot
 import models
 import numpy as np
 import re
-import sklearn
 import joblib
 import typer
 import time
 from rich import print
 from pathlib import Path
-from sklearn.metrics import accuracy_score, confusion_matrix
+from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay
 from tqdm import tqdm
 from models import ModelStrategy
 from plotting import plot_confusion_matrices_grid
@@ -52,48 +50,17 @@ def _format_config_tag(config: dict | None) -> str:
 MODEL_REGISTRY = {
     "random_forest": models.RandomForestStrategy,
     "logistic_regression": models.LogisticRegressionStrategy,
-    "svc": models.SVCStrategy,
-    "linear_svc": models.LinearSVCStrategy,
-    "bagging_rf": models.BaggingRFStrategy,
-    "bagging_svc": models.BaggingSVCStrategy,
-    "eegnet": models.EEGNetStrategy,
-    "cnn": models.CNNStrategy,
+    "svc": models.SVCStrategy
 }
 
 FEATURE_TYPES = [
-    "downsample_32hz",
-    "downsample_4hz",
-    "tfr_morlet",
-    "tfr_morlet_bands",
-    "tfr_morlet_bands_stats",
-    "tfr_morlet_bands_stats_mi",
-    "tfr_dwt_cmor",
-    "tfr_morlet_cnn",
-    "stft_bands_stats",
-    "stft_bands_stats_mi",
-    "swvd_band_mean",
-    "swvd_logbins_mean",
-    "swvd_full",
-    "swvd_cnn",
-    "dwt_hierarchical_allstats",
-    "dwt_hierarchical_mean",
-    "dwt_mean_256Hz",
-    "dwt_mean_32Hz",
-    "dwt_mean_4Hz",
-    "dwt_channel_select",
-    "dwt_stats",
-    "dwt_stats_mi",
-    "tfr_pca",
-    "bandpower_mean",
-    "bandpower_mean_mi",
-    "bandpower_mean_sd",
-    "bandpower_mean_window",
-    "bandpower_mean_sd_window",
-    "bandpower_phase",
     "stack",
     "mean",
     "mean_mi",
-    "bandphase"
+    "bandpower_mean",
+    "bandpower_mean_mi",
+    "dwt_stats",
+    "dwt_stats_mi",
 ]
 
 MODEL_CHOICES = tuple(MODEL_REGISTRY.keys())
@@ -178,10 +145,11 @@ def fit_model(
     result_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    # Check if this configuration has already been run
+    # Check if this configuration has already been run (only skip if exactly 15 files exist)
     existing_results = list(result_dir.glob("*.joblib"))
-    if existing_results:
-        print(f"[yellow]WARNING[/yellow]: Results for this configuration already exist at {result_dir.resolve()}")
+    n_subjects = 15
+    if len(existing_results) == 15:
+        print(f"[yellow]WARNING[/yellow]: {len(existing_results)} files existing in {result_dir.resolve()}")
         print(f"[yellow]SKIPPING[/yellow]: To rerun, delete: {base_dir.resolve()}")
         return
 
@@ -304,7 +272,7 @@ def fit_model(
         print(f"Saved scores to {score_log_path.resolve()}")
 
         # save plot for this subject
-        disp = sklearn.metrics.ConfusionMatrixDisplay(
+        disp = ConfusionMatrixDisplay(
             confusion_matrix=confusion_matrix_val,
             display_labels=class_labels,
         )

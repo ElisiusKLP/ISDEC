@@ -3,7 +3,6 @@ import jax
 import jax.numpy as jnp
 import optax
 from flax import linen as nn
-from flax import nnx
 from flax.training import train_state
 from typing import Any
 

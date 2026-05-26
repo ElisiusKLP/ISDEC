@@ -23,6 +23,7 @@ dependencies = [
     "tqdm>=4.67.3",
     "typer>=0.25.1",
     "tftb>=0.1.4",
+    "kaleido>=1.3.0",
 ]
 
 [tool.pyright]

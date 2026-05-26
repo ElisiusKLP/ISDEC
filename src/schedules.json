@@ -59,13 +59,20 @@
     "11": { 
       "models": ["random_forest", "svc", "logistic_regression"],
       "features": [
-        "stack", 
+        "stack",
         "mean",
         "mean_mi",
         "bandpower_mean",
         "bandpower_mean_mi",
         "dwt_stats",
         "dwt_stats_mi"
+      ],
+      "scales": ["scale"]
+    },
+    "12": { 
+      "models": ["random_forest", "svc", "logistic_regression"],
+      "features": [
+        "stack"
       ],
       "scales": ["scale"]
     }
