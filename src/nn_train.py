@@ -1,3 +1,4 @@
+# Note: Neural networks were implemented, but not used in the final analysis.
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -68,7 +69,7 @@ class FlaxTrainer:
 
 
 class FlaxSKLearnLikeModel:
-    """Very small sklearn-like wrapper around `FlaxTrainer`.
+    """Small sklearn-like wrapper around `FlaxTrainer`.
 
     Provides `fit(X, y)` and `predict(X)` so it can be used where a
     simple `.fit`/`.predict` model object is expected.
