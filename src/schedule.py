@@ -26,29 +26,6 @@ def _load_schedules() -> dict:
 
 SCHEDULES = _load_schedules()
 
-def expand_config_grid(model_config: dict[str, object] | None) -> list[dict[str, object]]:
-	"""Expand a model config into one config per combination of list-valued parameters."""
-	if not model_config:
-		return [{}]
-
-	config_keys = list(model_config.keys())
-	value_options: list[list[object]] = []
-	for key in config_keys:
-		value = model_config[key]
-		if isinstance(value, list):
-			if not value:
-				raise ValueError(f"Configuration parameter '{key}' cannot be an empty list")
-			value_options.append(list(value))
-		else:
-			value_options.append([value])
-
-	grid_configs: list[dict[str, object]] = []
-	for combo in product(*value_options):
-		grid_configs.append(dict(zip(config_keys, combo)))
-
-	return grid_configs
-
-
 def _run_task(
 	model_name: str, 
 	feature_name: str, scale: bool, 
@@ -59,12 +36,14 @@ def _run_task(
 	):
 	"""Helper to run a single scheduled job. Separated so it can be parallelized with joblib."""
 	print(f"[{run_idx}/{total_runs}] model={model_name} feature={feature_name} scale={'scale' if scale else 'no_scale'} config_index={config_idx}/{total_configs}")
+	# get the model strategy for this run
 	strategy = get_model_strategy(
 		model_name,
 		scale=scale,
 		feature_type=feature_name,
 		config=model_config_variant,
 	)
+	# Fit the model for this strategy (parallelized over subjects within fit_model)
 	fit_model(strategy, train_dir, val_dir, n_jobs=n_jobs_subject)
 	return True
 
@@ -123,26 +102,34 @@ def main(
 		raise ValueError(f"Schedule '{schedule}' not found in schedules.json. Available: {list(SCHEDULES.keys())}")
 	schedule_entry = SCHEDULES[schedule_key]
 
+	# Override model, feature, and scale choices with schedule if specified, otherwise use command-line options
 	RUN_MODEL_CHOICES = schedule_entry.get("models", [])
 	RUN_FEATURE_CHOICES = schedule_entry.get("features", [])
 	RUN_SCALE_CHOICES = schedule_entry.get("scales", ["scale"]) if schedule_entry else ["scale"]
 
+	# If schedule specifies a config grid for any model, it will be used instead of the default config. Otherwise, defaults will be used.
 	model = override_choices(RUN_MODEL_CHOICES, list(MODEL_CHOICES))
 	feature = override_choices(RUN_FEATURE_CHOICES, list(FEATURE_CHOICES))
 	scale_state = override_choices(RUN_SCALE_CHOICES, ["scale", "no_scale"])
 
+	# Create list of runs as the product of model, feature, and scale choices
 	runs = list(product(model, feature, scale_state))
 	# Build task list (model, feature, scale, variant, run_idx, total_runs, config_idx, total_configs)
 	tasks: list[tuple] = []
+	# Loop over runs and expand config grid for each model
 	for run_idx, (model_name, feature_name, state) in enumerate(runs, start=1):
 		scale = state == "scale"
 		model_config = param_config.get(model_name)
+
+		# If use_config_grid is True and model_config exists, create a grid of configurations to run.
 		if use_config_grid and model_config:
 			grid = list(ParameterGrid(model_config))
 			print(f"Using configuration grid for {model_name}: {model_config}")
+		# If use_config_grid is True but no config exists for this model, we raise an error
 		elif use_config_grid and not model_config:
 			grid = [{}]
-			print(f"No specific configuration found for {model_name} in schedule_config.json. Using defaults")
+			raise ValueError(f"No specific configuration found for {model_name} in schedule_config.json. Using defaults")
+		# If use_config_grid is False, we ignore any config grid and just run the default configuration for this model.
 		else:
 			grid = [{}]
 			if model_config:
@@ -150,6 +137,7 @@ def main(
 			else:
 				print(f"Running defaults for {model_name} (no config grid)")
 
+		# For each hyperparameter configuration in the grid, we add a task to the list with the run and config indices for logging.
 		total_configs = len(grid)
 		for config_idx, variant in enumerate(grid, start=1):
 
@@ -161,13 +149,14 @@ def main(
 					
 						print(f"Skipping infeasible config for random_forest+stack: {variant}")
 						continue
-
+			
 			tasks.append((model_name, feature_name, scale, variant, run_idx, len(runs), config_idx, total_configs, n_jobs))
 
+	# Setup the total number of tasks
 	total_tasks = len(tasks)
 	print(f"Prepared {total_tasks} tasks (models x features x scales x configs). Running with n_jobs={n_jobs}")
 
-	# run tasks sequentially, parrallel over subjects within each task
+	# run tasks sequentially, parallel over subjects within each task
 	for args in tasks:
 		try:
 			_run_task(*args)
@@ -175,7 +164,7 @@ def main(
 			print(f"Error running task with args {args}: {e}")
 			continue
 
-	# TODO: if we wanted to parallelize across tasks instead of subjects, we could do:
+	# TODO: if we wanted to parallelize across tasks (or instead of subjects inside classification.py), we could do:
 	#Parallel(n_jobs=n_jobs)(delayed(_run_task)(*args) for args in tasks)
 
 

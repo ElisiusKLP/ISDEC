@@ -31,6 +31,8 @@ def create_features(
 
     mi_k_channels = 16
 
+    # Setup each feature type case
+    # Note: they can only be used if registered in classifcation.py FEATURE_TYPES
     if feature_type == "tfr_morlet":
         return transform_to_time_frequency(x, sfreq=256, algorithm="morlet")
     elif feature_type == "tfr_morlet_cnn":

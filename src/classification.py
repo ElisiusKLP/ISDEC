@@ -11,6 +11,7 @@ from rich import print
 from pathlib import Path
 from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay
 from tqdm import tqdm
+from joblib import Parallel, delayed
 from models import ModelStrategy
 from plotting import plot_confusion_matrices_grid
 
@@ -24,6 +25,7 @@ val_dir = joblib_dir / "validation_set"
 
 
 def _format_config_value(value: object) -> str:
+    """Format a config value into a deterministic filesystem-safe string."""
     if isinstance(value, dict):
         return _format_config_tag(value)
     if isinstance(value, list):
@@ -103,6 +105,7 @@ def fit_model(
     if train_dir is None or val_dir is None:
         train_dir, val_dir = strategy.get_data_dirs()
 
+    # Get list of training files and check we have some data to train on
     train_files = sorted(train_dir.glob("*.joblib"))
     if len(train_files) == 0:
         raise ValueError("No training files collected from glob(*.joblib)")
@@ -124,6 +127,7 @@ def fit_model(
     aggregate_samples = 0
     aggregate_correct = 0
     
+    # Build run tag for logging and results
     strategy_scale = bool(getattr(strategy, "scale", True))
     strategy_feature_type = str(getattr(strategy, "feature_type", "stack"))
     strategy_config = getattr(strategy, "config", None)
@@ -180,10 +184,12 @@ def fit_model(
 
     # define per-subject worker
     def _process_subject(file_path: Path):
+        """Process a single subject's data: load, feature transform, train, predict, score, and log results."""
         # create fresh strategy instance per worker to avoid shared-state/pickle issues
         model_name = strategy.get_name()
         strategy_worker = get_model_strategy(model_name, scale=strategy_scale, feature_type=strategy_feature_type, config=strategy_config)
 
+        # grab the subject id as a label for logging
         match = re.search(r"preprocessed_sub-(\d{2}).joblib", file_path.name)
         sub_id = match.group(1) if match else file_path.stem
 
@@ -191,6 +197,7 @@ def fit_model(
         X_train = data["x"]
         y_train = data["y"]
 
+        # find corresponding validation file and load
         val_candidates = list(val_dir.glob(f"*{file_path.name}"))
         if len(val_candidates) == 0:
             raise ValueError(f"Did not find any validation file for {file_path.name}")
@@ -204,12 +211,14 @@ def fit_model(
         if callable(set_raw_data):
             set_raw_data(X_train, y_train, x_val)
 
-        # feature transform with progress indicator for slow transforms
+        # Feature transform training data, with caching
         train_cache_path = train_feature_cache_dir / f"{file_path.stem}.joblib"
+        # If the cache file exists and caching is enabled, load features from cache.
         if enable_feature_cache and train_cache_path.exists():
             print(f"    [Feature extraction... cache hit: {train_cache_path.name}]", flush=True)
             X_train_feats = joblib.load(train_cache_path)
         else:
+            # Otherwise, perform feature extraction and save to cache if enabled.
             print(f"    [Feature extraction...]", end="", flush=True)
             X_train_feats = strategy_worker.transform_train(X_train)
             print(f" done. Shape: {X_train_feats.shape}", flush=True)
@@ -220,18 +229,22 @@ def fit_model(
         if callable(set_data_info) and getattr(strategy_worker, "input_shape", None) is None:
             set_data_info(X_train_feats, class_labels)
 
+        # Some models may require target encoding (e.g. one-hot) before fitting; if the strategy has an `encode_targets` method, use it.
         encode_targets = getattr(strategy_worker, "encode_targets", None)
         if callable(encode_targets):
             y_train_fit = encode_targets(y_train)
         else:
             y_train_fit = y_train
 
+        # Create the model
         model = strategy_worker.create_model()
+        # Train the model and time the training duration
         print(f"    [Training model...]", flush=True)
         t0 = time.perf_counter()
         model.fit(X_train_feats, y_train_fit)
         train_time = time.perf_counter() - t0
 
+        # Feature transform validation data, with caching
         val_cache_path = val_feature_cache_dir / f"{val_file.stem}.joblib"
         if enable_feature_cache and val_cache_path.exists():
             print(f"    [Validation feature extraction... cache hit: {val_cache_path.name}]", flush=True)
@@ -244,6 +257,7 @@ def fit_model(
                 joblib.dump(x_val_feats, val_cache_path, compress=3)
                 print(f"    [Saved validation cache: {val_cache_path.name}]", flush=True)
 
+        # Predict and time the prediction duration
         print(f"    [Predicting...]", end="", flush=True)
         t1 = time.perf_counter()
         raw_pred = model.predict(x_val_feats)
@@ -255,14 +269,17 @@ def fit_model(
         else:
             y_pred = raw_pred
 
+        # Score predictions and compute baselines
         score = accuracy_score(y_val, y_pred)
         class_counts = np.bincount(y_val.astype(int))
         majority_baseline = class_counts.max() / len(y_val)
         delta_over_chance = score - chance_baseline
         delta_over_majority = score - majority_baseline
 
+        # Compute confusion matrix for this subject's validation set
         confusion_matrix_val = confusion_matrix(y_val, y_pred, labels=class_labels)
 
+        # Log scores and baselines to the score log file
         with open(score_log_path, "a") as f:
             f.write(
                 f"{file_path.stem},{score:.4f},{chance_baseline:.4f},"
@@ -282,7 +299,7 @@ def fit_model(
         fig_path = confusion_dir / f"{run_tag}_{file_path.stem}_confusion_matrix.png"
         fig.savefig(fig_path)
 
-        # save joblib
+        # save joblib to results
         result_path = result_dir / f"{run_tag}_{file_path.stem}.joblib"
         joblib.dump({
             "y_true": y_val,
@@ -318,8 +335,6 @@ def fit_model(
         }
 
     # run per-subject processing in parallel
-    from joblib import Parallel, delayed
-
     if n_jobs == 1:
         # When verbose, disable tqdm so nested prints are visible; otherwise show progress
         results = [_process_subject(f) for f in tqdm(train_files, desc="Training models on subjects", disable=False)]
@@ -350,6 +365,7 @@ def fit_model(
     overall_accuracy = aggregate_correct / aggregate_samples if aggregate_samples > 0 else 0.0
     mean_subject_score = float(np.mean([entry["score"] for entry in results])) if results else 0.0
     mean_majority_baseline = float(np.mean([entry["majority_baseline"] for entry in results])) if results else 0.0
+    # Normalize confusion matrix by row (true class) to get per-class accuracy across subjects
     row_sums = aggregate_confusion.sum(axis=1, keepdims=True)
     normalized_confusion = np.divide(
         aggregate_confusion,
@@ -357,6 +373,7 @@ def fit_model(
         out=np.zeros_like(aggregate_confusion, dtype=float),
         where=row_sums != 0,
     )
+    # create a summary string with key results for logging
     summary_lines = [
         "",
         "=== Aggregate Validation Summary ===",
@@ -372,6 +389,7 @@ def fit_model(
         np.array2string(normalized_confusion, formatter={"float_kind": lambda x: f"{x:.3f}"}),
         "Most frequent off-diagonal confusions per class:",
     ]
+    # For each class, identify which other class it is most often confused with (off-diagonal), and report the count and rate of that confusion.
     for idx, class_id in enumerate(class_labels):
         off_diag = aggregate_confusion[idx].copy()
         off_diag[idx] = 0
@@ -390,6 +408,7 @@ def fit_model(
     summary_text = "\n".join(summary_lines)
     print(summary_text)
 
+    # save summary to a text file
     summary_dir = base_dir / "logs"
     summary_dir.mkdir(parents=True, exist_ok=True)
     summary_path = summary_dir / f"{run_tag}_summary.txt"

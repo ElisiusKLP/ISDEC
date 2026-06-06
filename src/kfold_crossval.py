@@ -20,6 +20,7 @@ val_dir = joblib_dir / "validation_set"
 
 kfold_dir = Path("results/kfold")
 
+# Define the winning model configuration (this would be based on the grid-search schedule.py results)
 WINNING_MODEL = {
     "model_name": "random_forest",
     "feature_type": "bandpower_mean",
@@ -35,6 +36,7 @@ WINNING_MODEL = {
 }
 
 def run_kfold_on_subset_data(model, X, y, n_splits=5):
+    """Run k-fold cross-validation on the given subset of data and return the scores for each fold."""
     kfold = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=2001)
 
     scores = []
@@ -48,17 +50,21 @@ def run_kfold_on_subset_data(model, X, y, n_splits=5):
         X_train, y_train = X[train_index], y[train_index]
         X_test, y_test = X[test_index], y[test_index]
 
+        # set a model training timer
         t0 = time.perf_counter()
         model.fit(X_train, y_train)
         train_time = time.perf_counter() - t0
 
+        # set a prediction timer
         t0 = time.perf_counter()
         y_preds = model.predict(X_test)
         pred_time = time.perf_counter() - t0
 
+        # save scores for this fold
         score = accuracy_score(y_test, y_preds)
         print(f"   Accuracy: {score:.4f}")
         print(f"   Training time: {train_time:.4f} seconds")
+        print(f"   Prediction time: {pred_time:.4f} seconds")
         scores.append(
             {
                 "fold": i+1,
@@ -74,6 +80,7 @@ def run_kfold_on_subset_data(model, X, y, n_splits=5):
     return scores
 
 def combine_train_val_sets(X_train, y_train, X_val, y_val):
+    """Combine the training and validation sets for k-fold cross-validation"""
     X = np.vstack([X_train, X_val])
     y = np.hstack([y_train, y_val])
     print(f"Combined training and validation sets: {X.shape[0]} samples, {X.shape[1]} features")
@@ -85,6 +92,8 @@ def fit_models(
     strategy: models.ModelStrategy,
     enable_feature_cache: bool = True
 ):
+    """Fit the given model strategy using k-fold cross-validation"""
+    # Get model name and feature type for logging and caching
     model_name = strategy.get_name()
     strategy_feature_type = str(getattr(strategy, "feature_type", "stack"))
     train_files = sorted(train_dir.glob("*.joblib"))
@@ -96,6 +105,7 @@ def fit_models(
     val_feature_cache_dir = feature_cache_dir / "validation_set"
 
     def _process_subject(file_path: Path, model_strategy: models.ModelStrategy):
+        """Run the whole process for a single subject, including loading data, feature extraction, and k-fold cross-validation"""
         # load model
         model = model_strategy.create_model()
         # grab some info labels
@@ -105,6 +115,7 @@ def fit_models(
         if scale_bool is None:
             raise ValueError(f"Model {model_name} does not have a 'scale' attribute to determine scale label")
 
+        # load training data
         train_data = joblib.load(file_path)
         X_train = train_data["x"]
         y_train = train_data["y"]
@@ -146,9 +157,11 @@ def fit_models(
         # Combine the training and validation sets for k-fold cross-validation
         X, y = combine_train_val_sets(X_train_feats, y_train, x_val_feats, y_val)
 
+        # Create subset proportions for k-fold cross-validation
         props = list(np.arange(0.1, 1.01, 0.05))
         print(f"proportions: {props}")
 
+        # Loop over proportions and run k-fold cross-validation for each subset of the data
         for prop in props:
             # subset the dataset to the given proportion
             n_samples = int(X.shape[0] * prop)
@@ -161,6 +174,7 @@ def fit_models(
             # run k-fold cross-validation on the subsetted data
             kfold_result = run_kfold_on_subset_data(model, X_subset, y_subset, n_splits=5)
 
+            # Save the k-fold result for this subject
             kfold_result = {
                 "model_name": model_name,
                 "subject_id": sub_id,
@@ -190,6 +204,7 @@ def main():
         config=cast(dict[str, object], WINNING_MODEL["config"])
     )
 
+    # Run the k-fold cross-validation process for the winning model
     fit_models(model_strategy, enable_feature_cache=True)
     
 
