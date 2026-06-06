@@ -25,25 +25,35 @@ def transform_to_band_power(
     n_overlap: int = True,
     stack_channels: bool = True
 ) -> np.ndarray:
-    """
-    Transform EEG data into band power features using MNE PSD.
+    """Compute band-power features from EEG using Welch PSD.
 
-    Parameters
-    ----------
-    x : np.ndarray
-        Shape (epochs, channels, timepoints)
-    sfreq : float
-        Sampling frequency in Hz
-    bands : dict
-        Frequency bands, e.g. {"delta": (1,4), "theta": (4,8), ...}
-    n_overlap : int
-        Number of timepoints to overlap between segments
+    This computes the power spectral density (PSD) with MNE's
+    Welch implementation and either averages power within each
+    supplied frequency band or returns the full band-limited PSD
+    bins depending on ``mean``.
 
-    Returns
-    -------
-    X_bp : np.ndarray
-        If mean=True: shape (epochs, channels * n_bands)
-        If mean=False: shape (epochs, channels * total_band_freq_bins)
+    Args:
+        x (np.ndarray): EEG array shaped (epochs, channels, timepoints).
+        sfreq (float): Sampling frequency in Hz.
+        bands (dict[str, tuple[float, float]]): Mapping of band name
+            to (fmin, fmax) in Hz, e.g. {"delta": (1, 4)}.
+        mean (bool): If True, average PSD within each band and return
+            one value per band; if False, return all frequency bins
+            inside each band. Defaults to True.
+        n_overlap (int | bool): Number of timepoints to overlap between
+            Welch segments. If False or 0, no overlap is used. Defaults
+            to True (interpreted below when computing n_overlap).
+        stack_channels (bool): If True, flatten channels into the
+            last feature axis (shape (epochs, channels * features)).
+
+    Returns:
+        np.ndarray: Feature array. If ``mean`` is True the shape is
+            (epochs, channels * n_bands) when ``stack_channels`` is
+            True, or (epochs, channels, n_bands) otherwise. If
+            ``mean`` is False the returned shape is
+            (epochs, channels * total_band_freq_bins) when
+            ``stack_channels`` is True, or (epochs, channels,
+            total_band_freq_bins) otherwise.
     """
 
     if bands is None:
@@ -99,12 +109,40 @@ def transform_to_time_frequency(
     n_freqs: int = 20,
     max_signal_len: int = 512,
     ) -> np.ndarray:
-    """Transform EEG data into time-frequency features.
+    """Compute time-frequency representations for EEG signals.
 
-    For Morlet transforms:
-    - in_bands=False returns flattened power across all frequency bins and timepoints.
-    - in_bands=True returns flattened band-aggregated amplitude across timepoints.
-    - max_signal_len: cap signal length before expensive TFR computation to prevent memory overflow
+    Supports Morlet continuous wavelet transform (CWT) and a
+    discrete wavelet transform (DWT) path. For Morlet, the function
+    can either return the full power tensor or aggregate power within
+    supplied bands.
+
+    Args:
+        x (np.ndarray): EEG array shaped (epochs, channels, timepoints).
+        sfreq (float): Sampling frequency in Hz.
+        algorithm (str): Either "morlet" (default) or "dwt".
+        in_bands (bool): When using the Morlet algorithm, if True
+            aggregate Morlet amplitudes into the provided ``bands``
+            and return band-wise amplitudes; if False return power
+            across all sampled frequencies and timepoints.
+        downsample_to_freq (float | None): Optional temporal
+            downsampling frequency (Hz) applied to the time axis of
+            the TFR output. If None no temporal resampling is done.
+        bands (dict | None): Mapping of band name to (fmin, fmax).
+            Required when ``in_bands`` is True.
+        n_freqs (int): Number of Morlet center frequencies to sample
+            between 1 Hz and a Nyquist-safe upper bound. Must be >=2.
+        max_signal_len (int): If >0 and the input time series is
+            longer than this value the signal will be resampled to
+            ``max_signal_len`` before computing Morlet transforms to
+            limit memory usage.
+
+    Returns:
+        np.ndarray: Flattened feature array. For Morlet with
+            ``in_bands=False`` returns an array of shape
+            (epochs, channels * freqs * timepoints) after optional
+            downsampling. For Morlet with ``in_bands=True`` returns
+            (epochs, channels * n_bands * new_timepoints). For DWT
+            returns stacked coefficients per epoch and channel.
     """
     if x.ndim != 3:
         raise ValueError(f"Expected x with shape (epochs, channels, timepoints), got {x.shape}")
@@ -127,6 +165,7 @@ def transform_to_time_frequency(
             raise ValueError(
                 f"Sampling frequency too low for Morlet range: sfreq={sfreq}, max usable freq={max_freq}"
             )
+        # log-spaced center frequencies between 1 Hz and the safe max
         freqs = np.logspace(np.log10(1.0), np.log10(max_freq), num=n_freqs)
         n_cycles = freqs / 2.0  # example: more cycles for higher freqs
 
@@ -134,6 +173,7 @@ def transform_to_time_frequency(
             if bands is None:
                 raise ValueError("bands dictionary must be provided when in_bands=True")
 
+            # compute complex-valued TFR to extract amplitude per freq/time
             complex_tfr = mne.time_frequency.tfr_array_morlet(
                 x,
                 sfreq=sfreq,
@@ -166,6 +206,7 @@ def transform_to_time_frequency(
 
             return band_amplitude.reshape(n_epochs, n_channels * band_amplitude.shape[2] * band_amplitude.shape[3])
 
+        # compute power TFR (used when not aggregating into bands)
         power = mne.time_frequency.tfr_array_morlet(
             x,
             sfreq=sfreq,
@@ -192,6 +233,7 @@ def transform_to_time_frequency(
                 "Time series is too short for a discrete wavelet transform with the chosen wavelet"
             )
 
+        # collect per-epoch concatenated DWT coefficients
         epoch_feature_blocks = []
         for epoch in range(n_epochs):
             channel_blocks = []
@@ -219,57 +261,37 @@ def transform_to_morlet_stats(
     entropy_bins: int = 64,
     stack_channels: bool = True,
 ) -> np.ndarray:
-    """
-    Transform EEG signals into compact bandpower statistics using
-    Morlet continuous wavelet transforms (CWT).
+    """Extract compact band-power statistics using Morlet CWT.
 
-    Pipeline
-    --------
-    1. Compute Morlet TFR power
-    2. Average frequencies within each canonical EEG band
-    3. Produce a band-power time series
-    4. Compute summary statistics across time:
-        - mean
-        - standard deviation
-        - Shannon entropy
+    The function computes Morlet time-frequency power, averages
+    frequencies within canonical EEG bands to produce band-power time
+    series, and then summarizes each band-time series by its mean,
+    standard deviation and Shannon entropy. The resulting features
+    are concatenated per channel and band.
 
-    Parameters
-    ----------
-    x : np.ndarray
-        EEG array with shape:
-            (epochs, channels, timepoints)
+    Args:
+        x (np.ndarray): EEG array shaped (epochs, channels, timepoints).
+        sfreq (float): Sampling frequency in Hz.
+        bands (dict | None): Mapping of band name to (fmin, fmax).
+            Defaults to canonical EEG bands if None.
+        freqs_per_band (int): Number of Morlet center frequencies to
+            sample inside each band. Must be >=1.
+        decim (int): Temporal decimation factor passed to MNE TFR
+            computation to reduce memory usage. Must be >=1.
+        n_cycles_scale (float): Controls wavelet duration. Per-
+            frequency cycles are computed as ``freq / n_cycles_scale``
+            then clipped to a reasonable range.
+        entropy_bins (int): Number of histogram bins for Shannon
+            entropy computation across time.
+        stack_channels (bool): If True flatten channels into the
+            feature dimension producing shape (epochs, channels *
+            bands * 3). If False returns (epochs, channels, bands, 3).
 
-    sfreq : float
-        Sampling frequency in Hz.
-
-    bands : dict[str, tuple[float, float]]
-        EEG frequency bands.
-        Defaults to canonical EEG bands.
-
-    freqs_per_band : int
-        Number of Morlet center frequencies sampled
-        within each band.
-
-    decim : int
-        Temporal decimation factor during TFR computation.
-        Larger values reduce memory usage.
-
-    n_cycles_scale : float
-        Controls wavelet duration:
-            n_cycles = clip(freq / n_cycles_scale, 3, 12)
-
-    entropy_bins : int
-        Number of histogram bins used for Shannon entropy.
-
-    Returns
-    -------
-    np.ndarray
-        Shape:
-            (epochs, channels * n_bands * 3)
-
-        Features are ordered as:
-            [mean, std, entropy]
-        for each band and channel.
+    Returns:
+        np.ndarray: Feature array of shape (epochs, channels * n_bands * 3)
+            when ``stack_channels`` is True, otherwise
+            (epochs, channels, n_bands, 3). The last dimension for
+            each band contains [mean, std, entropy].
     """
 
     if x.ndim != 3:
@@ -298,9 +320,7 @@ def transform_to_morlet_stats(
             "gamma": (30.0, 100.0),
         }
 
-    # ---------------------------------------------------------
     # Build frequency grid
-    # ---------------------------------------------------------
 
     freq_blocks = []
     band_slices = {}
@@ -338,18 +358,14 @@ def transform_to_morlet_stats(
 
     freqs = np.concatenate(freq_blocks)
 
-    # ---------------------------------------------------------
     # Morlet wavelet settings
-    # ---------------------------------------------------------
-
-
     min_cycles = 3
     max_cycles = 12
 
     n_cycles = freqs / n_cycles_scale
     n_cycles = np.clip(n_cycles, min_cycles, max_cycles)
 
-    # --- HARD SAFETY CAP based on signal length ---
+    # Hard safety cap based on signal length
     max_wavelet_length = x.shape[-1] / 3  # conservative
 
     # wavelet length ≈ n_cycles * sfreq / freq
@@ -361,11 +377,7 @@ def transform_to_morlet_stats(
         scale = max_wavelet_length / wavelet_lengths[too_long]
         n_cycles[too_long] *= scale
 
-    # ---------------------------------------------------------
-    # Compute TFR power
-    # Shape:
-    # (epochs, channels, freqs, time)
-    # ---------------------------------------------------------
+    # Compute TFR power (epochs, channels, freqs, time)
 
     power = mne.time_frequency.tfr_array_morlet(
         x,
@@ -378,9 +390,7 @@ def transform_to_morlet_stats(
         verbose=False,
     )
 
-    # ---------------------------------------------------------
     # Aggregate frequencies into band-power time series
-    # ---------------------------------------------------------
 
     band_power_series = []
 
@@ -388,23 +398,15 @@ def transform_to_morlet_stats(
 
         freq_slice = band_slices[band_name]
 
-        # Mean power within band
-        #
-        # Shape:
-        # (epochs, channels, time)
-        #
+        # Mean power within band (shape: epochs, channels, time)
         band_power = power[:, :, freq_slice, :].mean(axis=2)
 
         band_power_series.append(band_power)
 
-    # Shape:
-    # (epochs, channels, bands, time)
-    #
+    # Shape: (epochs, channels, bands, time)
     band_power_series = np.stack(band_power_series, axis=2)
 
-    # ---------------------------------------------------------
     # Feature extraction
-    # ---------------------------------------------------------
 
     feature_blocks = []
 
@@ -414,21 +416,15 @@ def transform_to_morlet_stats(
 
         band_ts = band_power_series[:, :, band_idx, :]
 
-        # ---------------------------------------------
         # Mean across time
-        # ---------------------------------------------
 
         mean_feat = band_ts.mean(axis=-1)
 
-        # ---------------------------------------------
         # Standard deviation across time
-        # ---------------------------------------------
 
         std_feat = band_ts.std(axis=-1)
 
-        # ---------------------------------------------
         # Shannon entropy across time
-        # ---------------------------------------------
 
         entropy_feat = np.zeros(
             (n_epochs, n_channels),
@@ -454,12 +450,7 @@ def transform_to_morlet_stats(
                     base=2,
                 )
 
-        # ---------------------------------------------
-        # Stack features
-        # Shape:
-        # (epochs, channels, 3)
-        # ---------------------------------------------
-
+        # Stack features (shape: epochs, channels, 3)
         band_features = np.stack(
             [
                 mean_feat,
@@ -471,19 +462,10 @@ def transform_to_morlet_stats(
 
         feature_blocks.append(band_features)
 
-    # ---------------------------------------------------------
-    # Final feature tensor
-    #
-    # Shape:
-    # (epochs, channels, bands, features)
-    # ---------------------------------------------------------
-
+    # Final feature tensor (shape: epochs, channels, bands, features)
     features = np.stack(feature_blocks, axis=2)
 
-    # Flatten:
-    #
-    # (epochs, channels * bands * features)
-    #
+    # Flatten (epochs, channels * bands * features)
     if stack_channels:
         return features.reshape(n_epochs, -1)
     else:
@@ -499,12 +481,33 @@ def tfr_mortlet_to_cnn(
     pre_downsample_to_sfreq: float | None = 128.0,
     max_signal_len: int = 512,
 ) -> np.ndarray:
-    """Compute Morlet time-frequency power and return images for CNN.
+    """Produce CNN-ready TFR images using Morlet power.
 
-    Returns array shaped (epochs, H, W, C) where H=n_freqs, W=target_size.
-    If `collapse_channels` is True the channel axis is averaged to produce C=1.
-    This builds on `transform_to_time_frequency` and performs minimal reshaping.
-    max_signal_len: cap signal length before Morlet computation to prevent memory overflow.
+    This function computes a Morlet time-frequency representation and
+    reshapes it into image tiles of shape (epochs, freqs, time, channels)
+    suitable for CNN input. Optionally channels are averaged into a
+    single image channel.
+
+    Args:
+        x (np.ndarray): EEG array shaped (epochs, channels, timepoints).
+        sfreq (float): Sampling frequency in Hz.
+        target_size (int): Desired temporal width (pixels) of output
+            images. The function computes a downsample frequency so
+            that the resulting time axis approximates ``target_size``.
+        n_freqs (int): Number of frequency bins (image height).
+        collapse_channels (bool): If True average channels producing
+            images with a single channel (C=1).
+        pre_downsample_to_sfreq (float | None): If provided and less
+            than ``sfreq``, the input will be downsampled before the
+            Morlet computation to reduce compute/memory.
+        max_signal_len (int): If >0, signals longer than this value
+            will be resampled to ``max_signal_len`` before Morlet
+            computation.
+
+    Returns:
+        np.ndarray: Images shaped (epochs, n_freqs, target_time, C)
+            where C is 1 if channels were collapsed, otherwise the
+            original channel count.
     """
     if x.ndim != 3:
         raise ValueError(f"Expected x with shape (epochs, channels, timepoints), got {x.shape}")
@@ -564,59 +567,45 @@ def transform_to_dwt_level_stats(
     sfreq: float,
     downsample_to_freq: float | None = None,
 ):
-    """
-    DWT-based EEG feature extraction.
+    """Extract DWT-based features and summary statistics per level.
 
-    Parameters
-    ----------
-    x : np.ndarray
-        Shape (epochs, channels, timepoints)
+    Performs a multi-level discrete wavelet decomposition per epoch
+    and channel, maps DWT levels to approximate frequency bands and
+    optionally downsamples the time axis. Summary statistics (mean,
+    std and entropy) are produced per level.
 
-    sfreq : float
-        Sampling frequency (Hz)
+    Args:
+        x (np.ndarray): EEG array shaped (epochs, channels, timepoints).
+        sfreq (float): Sampling frequency in Hz.
+        downsample_to_freq (float | None): Optional target temporal
+            sampling frequency (Hz) to resample the DWT-derived time
+            series to. If None no downsampling is applied.
 
-    downsample_to_freq : float | None
-        Optional temporal downsampling after feature extraction
-
-    Returns
-    -------
-    features_4d : np.ndarray
-        (epochs, channels, timepoints_downsampled, dwt_levels_used)
-
-    features_3d : np.ndarray
-        (epochs, channels, dwt_levels_used * stats_per_level)
-
-    features_2d : np.ndarray
-        Flattened version for ML models
-        (epochs, n_features)
+    Returns:
+        tuple: The implementation computes several derived tensors:
+            - features_4d: (epochs, channels, timepoints_downsampled, levels)
+            - features_3d: (epochs, channels, levels * stats_per_level)
+            - features_2d: (epochs, n_features) flattened for ML models
+            The function currently returns the computed summaries.
     """
 
     wavelet_name = "db4"
     n_epochs, n_channels, n_timepoints = x.shape
 
-    # ------------------------------------------------------------
     # DWT setup
-    # ------------------------------------------------------------
     max_level = pywt.dwt_max_level(n_timepoints, filter_len=8)
 
     if max_level < 1:
         raise ValueError("Signal too short for DWT")
 
-    # ------------------------------------------------------------
-    # Frequency mapping for each DWT level
-    # ------------------------------------------------------------
-    # Each level j corresponds approximately to:
-    # [fs/2^(j+1), fs/2^j]
-
+    # Frequency mapping for each DWT level (each level j ≈ [fs/2^(j+1), fs/2^j])
     level_freqs = {}
     for j in range(1, max_level + 1):
         f_low = sfreq / (2 ** (j + 1))
         f_high = sfreq / (2 ** j)
         level_freqs[j] = (f_low, f_high)
 
-    # ------------------------------------------------------------
     # Keep only levels that intersect 0–100 Hz
-    # ------------------------------------------------------------
     valid_levels = [
         j for j, (f_low, f_high) in level_freqs.items()
         if f_high <= 100 and f_high > 0
@@ -628,17 +617,13 @@ def transform_to_dwt_level_stats(
     n_levels = len(valid_levels)
     print(f"Using DWT levels: {valid_levels} with frequency ranges {[level_freqs[j] for j in valid_levels]} Hz", flush=True)
 
-    # ------------------------------------------------------------
     # Output tensor: (epochs, channels, time, levels)
-    # ------------------------------------------------------------
     features = np.zeros(
         (n_epochs, n_channels, n_timepoints, n_levels),
         dtype=np.float32
     )
 
-    # ------------------------------------------------------------
     # DWT decomposition
-    # ------------------------------------------------------------
     for ep in range(n_epochs):
         for ch in range(n_channels):
 
@@ -668,33 +653,26 @@ def transform_to_dwt_level_stats(
                 # store reconstructed time-series for this DWT level
                 features[ep, ch, :reconstructed.shape[0], i] = reconstructed
 
-    # ------------------------------------------------------------
-    # Optional downsampling in time domain
-    # ------------------------------------------------------------
+    # Optional downsample reconstructed level time-series in time
     if downsample_to_freq is not None:
-
         ratio = downsample_to_freq / sfreq
         new_t = int(n_timepoints * ratio)
 
-        downsampled = np.zeros(
-            (n_epochs, n_channels, new_t, n_levels),
-            dtype=np.float32
-        )
+        downsampled = np.zeros((n_epochs, n_channels, new_t, n_levels), dtype=np.float32)
 
         for i in range(n_levels):
             for ch in range(n_channels):
+                # resample each channel/level time-series to the target rate
                 downsampled[:, ch, :, i] = resample_poly(
                     features[:, ch, :, i],
                     up=int(downsample_to_freq),
                     down=int(sfreq),
-                    axis=-1
+                    axis=-1,
                 )[:, :new_t]
 
         features = downsampled
 
-    # ------------------------------------------------------------
     # Summarise each level across time: mean, std, entropy
-    # ------------------------------------------------------------
     # features shape: (epochs, channels, time, levels)
     # compute mean and std across time axis
     means = features.mean(axis=2)
@@ -729,13 +707,19 @@ def select_channels_by_mutual_info(
     y_train: np.ndarray,
     k_channels: int = 10,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Select top k channels based on mutual information with target.
+    """Select top-k channels by mutual information with the target.
+
+    Args:
+        x_train (np.ndarray): Training data shaped (epochs, channels, timepoints).
+        y_train (np.ndarray): Labels shaped (epochs,) or compatible.
+        k_channels (int): Number of channels to select.
+
     Returns:
-    new_x_train : np.ndarray
-        Shape (epochs, k_channels, timepoints)
-    channel_indices : np.ndarray
-        Indices of the selected channels in the original data
+        tuple: (new_x_train, selected_indices)
+            - new_x_train (np.ndarray): Data sliced to selected channels
+              shaped (epochs, k_channels, timepoints).
+            - selected_indices (np.ndarray): Indices of the selected
+              channels in the original channel axis.
     """
     from sklearn.feature_selection import mutual_info_classif
 
@@ -767,22 +751,15 @@ def downsample_time(
     original_sfreq: float,
     target_sfreq: float,
 ) -> np.ndarray:
-    """
-    Downsample EEG data in time dimension.
+    """Resample the time axis of EEG data to a new sampling rate.
 
-    Parameters
-    ----------
-    x : np.ndarray
-        Shape (epochs, channels, timepoints)
-    original_sfreq : float
-        Original sampling frequency in Hz
-    target_sfreq : float
-        Target sampling frequency in Hz
+    Args:
+        x (np.ndarray): EEG array shaped (epochs, channels, timepoints).
+        original_sfreq (float): Original sampling frequency (Hz).
+        target_sfreq (float): Desired sampling frequency (Hz).
 
-    Returns
-    -------
-    x_downsampled : np.ndarray
-        Shape (epochs, channels, new_timepoints)
+    Returns:
+        np.ndarray: Resampled data shaped (epochs, channels, new_timepoints).
     """
     from scipy.signal import resample
 
@@ -808,23 +785,39 @@ def transform_to_wigner_ville_features(
     max_signal_len: int = 512,
 ) -> np.ndarray:
 
-    """
-    Extract features from the smoothed pseudo-Wigner-Ville distribution.
+    """Extract features from the smoothed pseudo-Wigner-Ville distribution.
 
-    Parameters
-    ----------
-    x, sfreq: as usual
-    mode: "stats" returns aggregated statistics, "full" returns flattened TFR
-    stats: list of statistics to compute when mode=="stats" (e.g. ["mean", "std"])
-    average_over: whether to average statistics over the temporal axis ("time", default)
-        which yields per-frequency features, or over the frequency axis ("frequency")
-        which yields per-timepoint features.
-    downsample_to_freq: optional temporal downsampling frequency (Hz)
-    freq_aggregation: "none" (no freq aggregation), "log_bins" (aggregate into n_freq_bins 
-        logarithmic intervals), or "bands" (aggregate into predefined frequency bands)
-    n_freq_bins: number of logarithmic frequency bins (used if freq_aggregation="log_bins")
-    bands: dict of frequency bands (used if freq_aggregation="bands"), 
-        e.g. {"delta": (1, 4), "theta": (4, 8), ...}
+    This routine computes either a full time-frequency representation
+    (mode="full") or summary statistics across time or frequency
+    (mode="stats"). Frequency aggregation options include logarithmic
+    binning or aggregation into supplied bands.
+
+    Args:
+        x (np.ndarray): EEG array shaped (epochs, channels, timepoints).
+        sfreq (float): Sampling frequency in Hz.
+        mode (str): "stats" to return aggregated statistics, or "full"
+            to return a flattened TFR representation.
+        stats (list[str]): List of statistics to compute when ``mode``
+            is "stats", e.g. ["mean", "std"].
+        average_over (str): Whether to average statistics over the
+            "time" axis (default) producing per-frequency features,
+            or over "frequency" producing per-timepoint features.
+        downsample_to_freq (float | None): Optional temporal downsampling
+            frequency (Hz) applied after TFR computation.
+        freq_aggregation (str): How to aggregate frequency axis: "none",
+            "log_bins", "bands" or "cnn".
+        cnn_target_size (int): When producing CNN-style outputs,
+            target temporal size used for downsampling.
+        n_freq_bins (int): Number of logarithmic frequency bins when
+            using "log_bins" aggregation.
+        bands (dict | None): Frequency bands mapping when using
+            "bands" aggregation.
+        max_signal_len (int): Limit input signal length to prevent
+            excessive memory use.
+
+    Returns:
+        np.ndarray: Depending on ``mode`` and aggregation options either
+            aggregated statistics or a flattened full TFR representation.
     """
 
     if mode == "stats":
