@@ -785,7 +785,9 @@ def transform_to_wigner_ville_features(
     max_signal_len: int = 512,
 ) -> np.ndarray:
 
-    """Extract features from the smoothed pseudo-Wigner-Ville distribution.
+    """
+    NOT CURRENTLY USED - this was experimental. Kept for future reference.
+    Extract features from the smoothed pseudo-Wigner-Ville distribution.
 
     This routine computes either a full time-frequency representation
     (mode="full") or summary statistics across time or frequency
