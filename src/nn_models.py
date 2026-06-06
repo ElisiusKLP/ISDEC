@@ -1,3 +1,4 @@
+# Note: Neural networks were implemented, but not used in the final analysis.
 from flax import linen as nn
 
 class EEGNet(nn.Module):
@@ -52,10 +53,7 @@ class EEGNet(nn.Module):
             deterministic=not train
         )
 
-        # -----------------------------------
         # Separable Convolution
-        # -----------------------------------
-
         x = nn.Conv(
             features=self.F2,
             kernel_size=(1, 16),
